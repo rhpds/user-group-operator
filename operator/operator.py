@@ -273,7 +273,7 @@ class UserGroupMember:
     @staticmethod
     def create(user, identity, group_name, logger):
         group = Group.get_or_create(group_name)
-        name = f"{user.name}.{group_name}"
+        name = f"{group_name}.{user.uid}"
         try:
             custom_objects_api.create_cluster_custom_object(
                 'usergroup.gpte.redhat.com', 'v1', 'usergroupmembers',
