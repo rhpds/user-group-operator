@@ -311,6 +311,7 @@ class UserGroupMember:
 @kopf.on.startup()
 def configure(settings: kopf.OperatorSettings, **_):
     # Disable scanning for CustomResourceDefinitions updates
+    settings.persistence.finalizer = operator_domain
     settings.scanning.disabled = True
 
 @kopf.on.event('user.openshift.io', 'v1', 'users')
