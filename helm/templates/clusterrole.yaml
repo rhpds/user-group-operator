@@ -1,0 +1,58 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "userGroupOperator.name" . }}
+  labels:
+    {{- include "userGroupOperator.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+  - usergroup.gpte.redhat.com
+  resources:
+  - usergroupconfigs
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - usergroup.gpte.redhat.com
+  resources:
+  - usergroupmembers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - user.openshift.io
+  resources:
+  - identities
+  - users
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - user.openshift.io
+  resources:
+  - groups
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  attributeRestrictions: null
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+  - update

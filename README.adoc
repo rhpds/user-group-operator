@@ -1,0 +1,3 @@
+# User Group Operator
+
+The user-group-operator dynamically creates OpenShift groups and manages user group membership on user login.

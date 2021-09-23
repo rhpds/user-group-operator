@@ -1,0 +1,14 @@
+{{- if .Values.deploy -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "userGroupOperator.name" . }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "userGroupOperator.name" . }}
+subjects:
+- kind: ServiceAccount
+  name: {{ include "userGroupOperator.serviceAccountName" . }}
+  namespace: {{ include "userGroupOperator.namespaceName" $ }}
+{{- end -}}

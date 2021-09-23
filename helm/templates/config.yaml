@@ -1,0 +1,12 @@
+{{- if .Values.config.create }}
+---
+apiVersion: usergroup.gpte.redhat.com/v1
+kind: UserGroupConfig
+metadata:
+  name: cluster
+spec:
+  emailDomainGroups:
+    {{- toYaml .Values.config.emailDomainGroups | nindent 4 }}
+  identityProviderGroups:
+    {{- toYaml .Values.config.identityProviderGroups | nindent 4 }}
+{{- end }}
