@@ -20,43 +20,42 @@ custom_objects_api = kubernetes.client.CustomObjectsApi()
 class Group:
     @staticmethod
     def add_user(group_name, user_name, logger):
-        attempt = 0
-        while True:
-            attempt += 1
-            try:
-                group = Group.get(group_name)
-                if group:
-                    if user_name in group.users:
-                        return
-                    else:
-                        custom_objects_api.replace_cluster_custom_object(
-                            'user.openshift.io', 'v1', 'groups', group_name,
-                            {
-                                "apiVersion": "user.openshift.io/v1",
-                                "kind": "Group",
-                                "metadata": group.metadata,
-                                "users": group.users + [user_name],
-                            }
-                        )
-                        logger.info(f"Addded {user_name} to group {group_name}")
-                        return
+        try:
+            group = Group.get(group_name)
+            if group:
+                if user_name in group.users:
+                    return group
                 else:
-                    custom_objects_api.create_cluster_custom_object(
-                        'user.openshift.io', 'v1', 'groups',
+                    resource = custom_objects_api.replace_cluster_custom_object(
+                        'user.openshift.io', 'v1', 'groups', group_name,
                         {
                             "apiVersion": "user.openshift.io/v1",
                             "kind": "Group",
-                            "metadata": {
-                                "name": group_name,
-                            },
-                            "users": [user_name],
+                            "metadata": group.metadata,
+                            "users": group.users + [user_name],
                         }
                     )
-                    logger.info(f"Created group {group_name} with first user {user_name}")
-                    return
-            except kubernetes.client.rest.ApiException as e:
-                if attempt > 3:
-                    raise
+                    logger.info(f"Addded {user_name} to group {group_name}")
+                    return Group(resource)
+            else:
+                resource = custom_objects_api.create_cluster_custom_object(
+                    'user.openshift.io', 'v1', 'groups',
+                    {
+                        "apiVersion": "user.openshift.io/v1",
+                        "kind": "Group",
+                        "metadata": {
+                            "name": group_name,
+                        },
+                        "users": [user_name],
+                    }
+                )
+                logger.info(f"Created group {group_name} with first user {user_name}")
+                return Group(resource)
+        except kubernetes.client.rest.ApiException as e:
+            if e.status == 409:
+                raise kopf.TemporaryError(f"Conflict while adding {user_name} to {group_name}", delay=1)
+            else:
+                raise
 
     @staticmethod
     def get(group_name):
@@ -71,29 +70,28 @@ class Group:
 
     @staticmethod
     def get_or_create(group_name):
-        attempt = 0
-        while True:
-            attempt += 1
-            try:
-                group = Group.get(group_name)
-                if not group:
-                    group = Group(
-                        custom_objects_api.create_cluster_custom_object(
-                            'user.openshift.io', 'v1', 'groups',
-                            {
-                                "apiVersion": "user.openshift.io/v1",
-                                "kind": "Group",
-                                "metadata": {
-                                    "name": group_name,
-                                },
-                                "users": [],
-                            }
-                        )
+        try:
+            group = Group.get(group_name)
+            if not group:
+                group = Group(
+                    custom_objects_api.create_cluster_custom_object(
+                        'user.openshift.io', 'v1', 'groups',
+                        {
+                            "apiVersion": "user.openshift.io/v1",
+                            "kind": "Group",
+                            "metadata": {
+                                "name": group_name,
+                            },
+                            "users": [],
+                        }
                     )
-                return group
-            except kubernetes.client.rest.ApiException as e:
-                if attempt > 3:
-                    raise
+                )
+            return group
+        except kubernetes.client.rest.ApiException as e:
+            if e.status == 409:
+                raise kopf.TemporaryError(f"Conflict while creating group {group_name}", delay=1)
+            else:
+                raise
 
     @staticmethod
     def remove_user(group_name, user_name, logger):
@@ -272,7 +270,7 @@ class UserGroupConfig:
 class UserGroupMember:
     @staticmethod
     def create(user, identity, group_name, logger):
-        group = Group.get_or_create(group_name)
+        group = Group.get(group_name)
         name = f"{group_name}.{user.uid}"
         try:
             custom_objects_api.create_cluster_custom_object(
@@ -289,7 +287,11 @@ class UserGroupMember:
                         }]
                     },
                     "spec": {
-                        "group": group.ref,
+                        "group": group.ref if group else {
+                            "apiVersion": "user.openshift.io/v1",
+                            "kind": "Group",
+                            "name": group_name,
+                        },
                         "identity": identity.ref,
                         "user": user.ref,
                     }
@@ -312,6 +314,7 @@ class UserGroupMember:
 def configure(settings: kopf.OperatorSettings, **_):
     # Disable scanning for CustomResourceDefinitions updates
     settings.persistence.finalizer = operator_domain
+    settings.persistence.progress_storage = kopf.StatusProgressStorage(field='status.kopf')
     settings.scanning.disabled = True
 
 @kopf.on.event('user.openshift.io', 'v1', 'users')
@@ -330,12 +333,22 @@ def config_handler(event, logger, **_):
 @kopf.on.create('usergroup.gpte.redhat.com', 'v1', 'usergroupmembers')
 @kopf.on.resume('usergroup.gpte.redhat.com', 'v1', 'usergroupmembers')
 @kopf.on.update('usergroup.gpte.redhat.com', 'v1', 'usergroupmembers')
-def usergroupmember_event(spec, logger, **_):
-    Group.add_user(
+def usergroupmember_event(name, spec, logger, **_):
+    group = Group.add_user(
         spec['group']['name'],
         spec['user']['name'],
         logger,
     )
+    if not 'uid' in spec['group']:
+        custom_objects_api.patch_cluster_custom_object(
+            operator_domain, operator_version, "usergroupmembers", name,
+            {
+                "spec": {
+                    "group": group.ref,
+                }
+            }
+        )
+
 
 @kopf.on.delete('usergroup.gpte.redhat.com', 'v1', 'usergroupmembers')
 def usergroupmember_delete(spec, logger, **_):

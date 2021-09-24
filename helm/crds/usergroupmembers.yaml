@@ -54,7 +54,6 @@ spec:
                 type: object
                 required:
                 - name
-                - uid
                 properties:
                   apiVersion:
                     default: user.openshift.io/v1
@@ -100,3 +99,6 @@ spec:
                     type: string
                   uid:
                     type: string
+          status:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
