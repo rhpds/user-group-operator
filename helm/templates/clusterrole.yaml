@@ -18,6 +18,7 @@ rules:
   - usergroup.gpte.redhat.com
   resources:
   - usergroupmembers
+  - usergroupmembers/status
   verbs:
   - create
   - delete
