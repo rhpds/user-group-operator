@@ -29,7 +29,7 @@ spec:
         - name: manager
           env:
           - name: OPERATOR_DOMAIN
-            value: usernamespace.gpte.redhat.com
+            value: usergroup.gpte.redhat.com
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
           image: "{{ include "userGroupOperator.image" . }}"
