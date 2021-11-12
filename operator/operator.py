@@ -2,6 +2,8 @@ import collections
 import copy
 import kopf
 import kubernetes
+import logging
+import math
 import os
 import re
 import time
@@ -179,6 +181,21 @@ class Identity:
     def uid(self):
         return self.metadata['uid']
 
+class InfiniteRelativeBackoff:
+    def __init__(self, n=2, maximum=60):
+        self.n = n
+        self.maximum = maximum
+
+    def __iter__(self):
+        prev_t = []
+        max_age = self.maximum * math.ceil(math.log(self.maximum) / math.log(self.n))
+        while True:
+            t = time.monotonic()
+            prev_t = [p for p in prev_t if t - p < max_age]
+            delay = self.n ** len(prev_t)
+            prev_t.append(t)
+            yield delay if delay < self.maximum else self.maximum
+
 class User:
     def __init__(self, resource, logger):
         self.identities = resource.get('identities', [])
@@ -209,6 +226,8 @@ class User:
 
     def manage_groups(self):
         config = UserGroupConfig.get_cluster_config()
+        if not config:
+            return
         identity = Identity.get(self.identity)
         if not identity:
             return
@@ -312,9 +331,19 @@ class UserGroupMember:
 
 @kopf.on.startup()
 def configure(settings: kopf.OperatorSettings, **_):
-    # Disable scanning for CustomResourceDefinitions updates
+    # Never give up from network errors
+    settings.networking.error_backoffs = InfiniteRelativeBackoff()
+
+    # Use operator domain as finalizer
     settings.persistence.finalizer = operator_domain
+
+    # Store progress in status.
     settings.persistence.progress_storage = kopf.StatusProgressStorage(field='status.kopf')
+
+    # Only create events for warnings and errors
+    settings.posting.level = logging.WARNING
+
+    # Disable scanning for CustomResourceDefinitions updates
     settings.scanning.disabled = True
 
 @kopf.on.event('user.openshift.io', 'v1', 'users')
