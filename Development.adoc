@@ -18,6 +18,7 @@ https://docs.openshift.com/container-platform/latest/cli_reference/developer_cli
 --------------------------------------------------
 helm template helm/ \
 --include-crds \
+--set config.create=false \
 --set deploy=false \
 --set namespace.name=user-group-operator-dev \
 | oc apply -f -
@@ -33,6 +34,7 @@ odo project set user-group-operator-dev
 +
 -------------------------------------------------------------------------
 oc adm policy add-cluster-role-to-user user-group-operator -z default
+oc policy add-role-to-user --role-namespace=user-group-operator-dev user-group-operator -z default
 -------------------------------------------------------------------------
 
 . Setup `odo` from the provided `devfile.yaml`:
@@ -57,7 +59,7 @@ odo push
 Remove `odo` component
 +
 ------------------------------------------
-odo delete --force user-namespace-operator
+odo delete --force user-group-operator
 ------------------------------------------
 +
 Delete resources created from helm template:

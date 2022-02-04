@@ -1,0 +1,240 @@
+---
+- name: Create User test-email-domain-0
+  kubernetes.core.k8s:
+    definition:
+      apiVersion: user.openshift.io/v1
+      kind: User
+      metadata:
+        name: test-email-domain-0
+      identities:
+      - user-group-operator-test:test-email-domain-0
+  register: r_create_user_test_0
+
+- name: Create Identity user-group-operator-test:test-email-domain-0
+  kubernetes.core.k8s:
+    definition:
+      apiVersion: user.openshift.io/v1
+      kind: Identity
+      metadata:
+        name: user-group-operator-test:test-email-domain-0
+      extra:
+        email: test-0@example.com
+      providerName: user-group-operator-test
+      providerUserName: test-email-domain-0
+      user:
+        name: test-email-domain-0
+        uid: "{{ r_create_user_test_0.result.metadata.uid }}"
+
+- name: Create test-email-domain UserGroupConfig
+  kubernetes.core.k8s:
+    definition:
+      apiVersion: usergroup.pfe.redhat.com/v1
+      kind: UserGroupConfig
+      metadata:
+        name: test-email-domain
+      spec:
+        emailDomainGroups:
+          enable: true
+          prefix: test-email-domain.
+
+- name: Verify UserGroupMember created for test-email-domain-0
+  kubernetes.core.k8s_info:
+    api_version: usergroup.pfe.redhat.com/v1
+    kind: UserGroupMember
+    label_selectors:
+    - usergroup.pfe.redhat.com/config=test-email-domain
+    - usergroup.pfe.redhat.com/user-uid={{ r_create_user_test_0.result.metadata.uid }}
+  register: r_verify_user_group_member
+  failed_when: >-
+    r_verify_user_group_member.resources | length != 1 or
+    r_verify_user_group_member.resources[0].spec.group.name != 'test-email-domain.example.com' or
+    r_verify_user_group_member.resources[0].spec.identity.name != 'user-group-operator-test:test-email-domain-0' or
+    r_verify_user_group_member.resources[0].spec.user.name != 'test-email-domain-0'
+  until: r_verify_user_group_member is success
+  retries: 10
+  delay: 1
+
+- name: Verify Group test-email-domain.example.com has user test-email-domain-0
+  kubernetes.core.k8s_info:
+    api_version: user.openshift.io/v1
+    kind: Group
+    name: test-email-domain.example.com
+  register: r_verify_group
+  failed_when: >-
+    r_verify_group.resources | length != 1 or
+    r_verify_group.resources[0].users != ['test-email-domain-0']
+  until: r_verify_group is success
+  retries: 10
+  delay: 1
+
+- name: Create User test-email-domain-1
+  kubernetes.core.k8s:
+    definition:
+      apiVersion: user.openshift.io/v1
+      kind: User
+      metadata:
+        name: test-email-domain-1
+      identities:
+      - user-group-operator-test:test-email-domain-1
+  register: r_create_user_test_1
+
+- name: Create Identity user-group-operator-test:test-email-domain-1
+  kubernetes.core.k8s:
+    definition:
+      apiVersion: user.openshift.io/v1
+      kind: Identity
+      metadata:
+        name: user-group-operator-test:test-email-domain-1
+      extra:
+        email: test-1@example.com
+      providerName: user-group-operator-test
+      providerUserName: test-email-domain-1
+      user:
+        name: test-email-domain-1
+        uid: "{{ r_create_user_test_1.result.metadata.uid }}"
+
+- name: Verify UserGroupMember created for test-1
+  kubernetes.core.k8s_info:
+    api_version: usergroup.pfe.redhat.com/v1
+    kind: UserGroupMember
+    label_selectors:
+    - usergroup.pfe.redhat.com/config=test-email-domain
+    - usergroup.pfe.redhat.com/user-uid={{ r_create_user_test_1.result.metadata.uid }}
+  register: r_verify_user_group_member
+  failed_when: >-
+    r_verify_user_group_member.resources | length != 1 or
+    r_verify_user_group_member.resources[0].spec.group.name != 'test-email-domain.example.com' or
+    r_verify_user_group_member.resources[0].spec.identity.name != 'user-group-operator-test:test-email-domain-1' or
+    r_verify_user_group_member.resources[0].spec.user.name != 'test-email-domain-1'
+  until: r_verify_user_group_member is success
+  retries: 10
+  delay: 1
+
+- name: Verify Group test-email-domain.example.com has user test-email-domain-1
+  kubernetes.core.k8s_info:
+    api_version: user.openshift.io/v1
+    kind: Group
+    name: test-email-domain.example.com
+  register: r_verify_group
+  failed_when: >-
+    r_verify_group.resources | length != 1 or
+    r_verify_group.resources[0].users != ['test-email-domain-0', 'test-email-domain-1']
+  until: r_verify_group is success
+  retries: 10
+  delay: 1
+
+- name: Create User test-email-domain-2
+  kubernetes.core.k8s:
+    definition:
+      apiVersion: user.openshift.io/v1
+      kind: User
+      metadata:
+        name: test-email-domain-2
+      identities:
+      - user-group-operator-test:test-email-domain-2
+  register: r_create_user_test_2
+
+- name: Create Identity user-group-operator-test:test-email-domain-2
+  kubernetes.core.k8s:
+    definition:
+      apiVersion: user.openshift.io/v1
+      kind: Identity
+      metadata:
+        name: user-group-operator-test:test-email-domain-2
+      extra:
+        email: test-2@example.com
+      providerName: user-group-operator-test
+      providerUserName: test-email-domain-2
+      user:
+        name: test-email-domain-2
+        uid: "{{ r_create_user_test_2.result.metadata.uid }}"
+
+- name: Verify UserGroupMember created for test-2
+  kubernetes.core.k8s_info:
+    api_version: usergroup.pfe.redhat.com/v1
+    kind: UserGroupMember
+    label_selectors:
+    - usergroup.pfe.redhat.com/config=test-email-domain
+    - usergroup.pfe.redhat.com/user-uid={{ r_create_user_test_2.result.metadata.uid }}
+  register: r_verify_user_group_member
+  failed_when: >-
+    r_verify_user_group_member.resources | length != 1 or
+    r_verify_user_group_member.resources[0].spec.group.name != 'test-email-domain.example.com' or
+    r_verify_user_group_member.resources[0].spec.identity.name != 'user-group-operator-test:test-email-domain-2' or
+    r_verify_user_group_member.resources[0].spec.user.name != 'test-email-domain-2'
+  until: r_verify_user_group_member is success
+  retries: 10
+  delay: 1
+
+- name: Verify Group test-email-domain.example.com has user test-email-domain-2
+  kubernetes.core.k8s_info:
+    api_version: user.openshift.io/v1
+    kind: Group
+    name: test-email-domain.example.com
+  register: r_verify_group
+  failed_when: >-
+    r_verify_group.resources | length != 1 or
+    r_verify_group.resources[0].users != ['test-email-domain-0', 'test-email-domain-1', 'test-email-domain-2']
+  until: r_verify_group is success
+  retries: 10
+  delay: 1
+
+- name: Delete User test-email-domain-1
+  kubernetes.core.k8s:
+    state: absent
+    api_version: user.openshift.io/v1
+    kind: User
+    name: test-email-domain-1
+
+- name: Delete Identity user-group-operator-test:test-email-domain-1
+  kubernetes.core.k8s:
+    state: absent
+    api_version: user.openshift.io/v1
+    kind: Identity
+    name: user-group-operator-test:test-email-domain-1
+
+- name: Verify UserGroupMember deleted for test-1
+  kubernetes.core.k8s_info:
+    api_version: usergroup.pfe.redhat.com/v1
+    kind: UserGroupMember
+    label_selectors:
+    - usergroup.pfe.redhat.com/user-uid={{ r_create_user_test_1.result.metadata.uid }}
+  register: r_verify_user_group_member
+  failed_when: >-
+    r_verify_user_group_member.resources | length != 0
+  until: r_verify_user_group_member is success
+  retries: 10
+  delay: 1
+
+- name: Verify Group test-email-domain.example.com user test-email-domain-1 removed
+  kubernetes.core.k8s_info:
+    api_version: user.openshift.io/v1
+    kind: Group
+    name: test-email-domain.example.com
+  register: r_verify_group
+  failed_when: >-
+    r_verify_group.resources | length != 1 or
+    r_verify_group.resources[0].users != ['test-email-domain-0', 'test-email-domain-2']
+  until: r_verify_group is success
+  retries: 10
+  delay: 1
+
+- name: Delete config for test-email-domain groups
+  kubernetes.core.k8s:
+    state: absent
+    api_version: usergroup.pfe.redhat.com/v1
+    kind: UserGroupConfig
+    name: test-email-domain
+
+- name: Verify all UserGroupMembers for test-email-domain are deleted
+  kubernetes.core.k8s_info:
+    api_version: usergroup.pfe.redhat.com/v1
+    kind: UserGroupMember
+    label_selectors:
+    - usergroup.pfe.redhat.com/config=test-email-domain
+  register: r_verify_user_group_member
+  failed_when: >-
+    r_verify_user_group_member.resources | length != 0
+  until: r_verify_user_group_member is success
+  retries: 10
+  delay: 1

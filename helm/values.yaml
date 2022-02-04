@@ -22,7 +22,7 @@ deploy: true
 replicaCount: 1
 
 image:
-  repository: quay.io/redhat-gpte/user-group-operator
+  repository: quay.io/redhat-pfe/user-group-operator
   pullPolicy: Always
   tagOverride: ""
 

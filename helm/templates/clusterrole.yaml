@@ -7,16 +7,10 @@ metadata:
     {{- include "userGroupOperator.labels" . | nindent 4 }}
 rules:
 - apiGroups:
-  - usergroup.gpte.redhat.com
+  - usergroup.pfe.redhat.com
   resources:
   - usergroupconfigs
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - usergroup.gpte.redhat.com
-  resources:
+  - usergroupconfigs/status
   - usergroupmembers
   - usergroupmembers/status
   verbs:
