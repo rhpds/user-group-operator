@@ -1,3 +1,106 @@
 # User Group Operator
 
-The user-group-operator dynamically creates OpenShift groups and manages user group membership on user login.
+The user-group-operator dynamically creates OpenShift groups and manages user group membership on first user login.
+Groups are automatically created and group membership is assigned when the User and Identity records are created in OpenShift.
+
+## Installation
+
+A Helm chart is provided in this repository which can be used to install the operator.
+
+## Configuration
+
+Configuration is performed wyth UserGroupConfig resources and support configuring automatic group membership assignment based on user email domain, identity provider, or LDAP directory query.
+
+### Email Domain Groups
+
+The user-group-operator can be configured to inspect Identity records for users and use the `extra.email` value to automatically assign users to groups based on their email address.
+
+This configuration will cause groups to be created with a prefix `email-domain.`.
+A user with email `alice@example.com` would be added to a user group called `email-domain.example.com`.
+
+---------------------------------------
+apiVersion: usergroup.pfe.redhat.com/v1
+kind: UserGroupConfig
+metadata:
+  name: email-domain
+spec:
+  emailDomainGroups:
+    enable: true
+    prefix: email-domain.
+---------------------------------------
+
+### Identity Provider Groups
+
+The user-group-operator can be configured to group users based on the identity provider used to authenticate them.
+
+The configuration below would cause a user that authenticated with an identity provider named `sso` to be added to the group `identity-provider.sso`.
+
+---------------------------------------
+apiVersion: usergroup.pfe.redhat.com/v1
+kind: UserGroupConfig
+metadata:
+  name: identity-provider
+spec:
+  identityProviderGroups:
+    enable: true
+    prefix: identity-provider.
+---------------------------------------
+
+### LDAP Group Mapping
+
+OpenShift includes LDAP sync capabilities with `oc adm groups sync`:
+
+https://docs.openshift.com/container-platform/4.9/authentication/ldap-syncing.html
+
+The Red Hat communities of practice provide automation for LDAP group syncing with the group-sync-operator:
+
+https://github.com/redhat-cop/group-sync-operator
+
+If suitable these methods are likely preferrable to the the user-group-operator.
+This operator differs from these others by focusing on dynamically adding users to groups rather than preassigning group membership for users before login.
+This is particularly helpful for very large groups of users where only a small percentage are expected to ever login to the cluster.
+The other difference in functionality is that the user-group-operator can assign group membership based on any LDAP attribute value, not just group membership.
+
+Note: The user-group-operator currently only supports finding groups by attributes on the user record.
+This is compatible with RFC2307bis LDAP directories that provide the `memberOf` attribute.
+Support for group queries could be implemented, but is not currently planned.
+
+The configuration below maps users who authenticate with the `sso` identity provider to groups `ldap-admin` and `ldap-dev`.
+Users are searched using the identity record `extra.email` matched against the LDAP `mail` attribute.
+
+---------------------------------------------------
+apiVersion: usergroup.pfe.redhat.com/v1
+kind: UserGroupConfig
+metadata:
+  name: ldap
+spec:
+  ldap:
+  - attributeToGroup:
+    - attribute: memberOf
+      valueToGroup:
+      - group: ldap-admin
+        value: cn=Admin,ou=Groups,dc=example,dc=com
+      - group: ldap-dev
+        value: cn=Dev,ou=Groups,dc=example,dc=com
+    authSecret:
+      name: ldap-auth
+    identityProviderName: sso
+    url: ldaps://ldap.example.com
+    userBaseDN: ou=Users,dc=example,dc=com
+    userSearchAttribute: mail
+    userSearchValue: email
+    userObjectClass: inetOrgPerson
+---------------------------------------------------
+
+Example LDAP authentication secret:
+
+----------------------------------------
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ldap-auth
+stringData:
+  bindDn: cn=read-only,dc=example,dc=com
+  bindPassword: password
+----------------------------------------
+
