@@ -1,9 +1,9 @@
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: usergroupconfigs.usergroup.gpte.redhat.com
+  name: usergroupconfigs.usergroup.pfe.redhat.com
 spec:
-  group: usergroup.gpte.redhat.com
+  group: usergroup.pfe.redhat.com
   scope: Cluster
   names:
     plural: usergroupconfigs
@@ -36,26 +36,142 @@ spec:
             properties:
               name:
                 type: string
+                maxLength: 63
+                pattern: ^[a-z0-9\-]*[a-z0-9]$
           spec:
             description: >-
               User Group Operator configuration.
             type: object
             properties:
               emailDomainGroups:
+                description: >-
+                  Use email domain in identity record to define group.
                 type: object
                 properties:
                   enable:
                     default: false
                     type: boolean
                   prefix:
+                    description: >-
+                      Prefix to add to email domain name to generate group name.
                     type: string
                     default: email-domain.
               identityProviderGroups:
+                description: >-
+                  Add users to groups based on the identity provider used to authenticate the user.
                 type: object
                 properties:
                   enable:
                     default: false
                     type: boolean
                   prefix:
+                    description: >-
+                      Prefix to add to identity provider name to generate group name.
                     type: string
                     default: identity-provider.
+              ldap:
+                description: >-
+                  Configuration to lookup user in LDAP directories to map group membership.
+                type: array
+                items:
+                  type: object
+                  required:
+                  - authSecret
+                  - url
+                  - userBaseDN
+                  properties:
+                    attributeToGroup:
+                      description: >-
+                        LDAP attributes to map to OpenShift groups.
+                        The attribute can be a single value attribute or a multi-value attribute like `memberOf`.
+                      type: array
+                      items:
+                        type: object
+                        required:
+                        - attribute
+                        properties:
+                          attribute:
+                            description: >-
+                              LDAP attribute name.
+                            type: string
+                          valueToGroup:
+                            description: >-
+                              Specific values to match to groups.
+                              If none are specified then all values will be mapped to groups.
+                            type: array
+                            items:
+                              type: object
+                              required:
+                              - value
+                              properties:
+                                group:
+                                  description: >-
+                                    OpenShift group name to associate to the user entry.
+                                  type: string
+                                value:
+                                  description: >-
+                                    Specific value to match for this attribute.
+                                  type: string
+                    authSecret:
+                      description: >-
+                        Credentials used to authenticate to LDAP.
+                        If provided then the operator will attempt to read the secret specified which
+                        should contain `bindDN` and `bindPassword`.
+                      type: object
+                      required:
+                      - name
+                      properties:
+                        name:
+                          description: >-
+                            Name of the ldap authentication secret.
+                          type: string
+                        namespace:
+                          description: >-
+                            Namespace of the ldap authentication secret.
+                            If not provided then the namespace of the operator will be assumed.
+                          type: string
+                    identityProviderName:
+                      description: >-
+                        Identity provider name for which to check this LDAP directory.
+                        If not specified then an attempt will be made to lookup all users in this LDAP directory.
+                      type: string
+                    insecure:
+                      description: >-
+                        By default all LDAP connections are secured with either secure LDAP (ldaps://) URLs or using TLS with LDAP (ldap://) URLs.
+                        If an insecure connection is required then this may be set to `true` to force use of insecure protocol.
+                      type: boolean
+                    url:
+                      description: >-
+                        LDAP URL of the form `ldap://ipa.example.com` or `ldaps://ipa.example.com`.
+                        Connections using `ldap://` are automatically secured with TLS unless explicitly disabled with the `insecure` configuration option.
+                        The server port will be determined by the protocol, 389 for `ldap://` and 636 for `ldaps://`.
+                        A port may be explicitly set by appending a port specification to the URL, ex: `ldaps://ipa.example.com:1636`.
+                      type: string
+                      pattern: '^ldaps?://[a-z0-9\-_.]+(:[0-9]+)?$'
+                    userBaseDN:
+                      description: >-
+                        The distinguished name (DN) of the branch of the directory where users searches will start.
+                      type: string
+                    userObjectClass:
+                      description: >-
+                        LDAP object class which represents users in the directory.
+                        Default: inetOrgPerson
+                      type: string
+                    userSearchAttribute:
+                      description: >-
+                        Name attribute used to find users in the directory from the user name.
+                        Default 
+                      type: string
+                    userSearchValue:
+                      description: >-
+                        Value from the User or Identity to match the userNameAttribute.
+                        `name` uses the value of the User name.
+                        Any other values are looked up in Identity `extra` data.
+                        Default `name`.
+                      type: string
+              refresh_interval:
+                description: >-
+                  Interval to recheck user group memberships to detect changes in seconds.
+                  Default 3600 (1 hour).
+                type: integer
+                minimum: 10

@@ -1,0 +1,46 @@
+---
+- name: test-ldap-server ClusterRole
+  kubernetes.core.k8s:
+    definition: >-
+      {{ lookup('template', 'test-ldap-server.ClusterRole.yml.j2') | from_yaml }}
+
+- name: Create test-ldap-server ServiceAccount
+  kubernetes.core.k8s:
+    namespace: "{{ test_namespace }}"
+    src: test-ldap-server.ServiceAccount.yml
+
+- name: test-ldap-server RoleBinding
+  kubernetes.core.k8s:
+    definition: >-
+      {{ lookup('template', 'test-ldap-server.RoleBinding.yaml.j2') | from_yaml }}
+
+- name: Create test-ldap-server ConfigMap
+  kubernetes.core.k8s:
+    namespace: "{{ test_namespace }}"
+    src: test-ldap-server.ConfigMap.yml
+
+- name: Create test-ldap-server Service
+  kubernetes.core.k8s:
+    namespace: "{{ test_namespace }}"
+    src: test-ldap-server.Service.yml
+
+- name: Create test-ldap-server Deployment
+  kubernetes.core.k8s:
+    namespace: "{{ test_namespace }}"
+    src: test-ldap-server.Deployment.yml
+
+- name: Wait for test-ldap-server Pod
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: "{{ test_namespace }}"
+    label_selectors:
+    - app.kubernetes.io/name=test-ldap-server
+  register: r_verify_test_ldap_server_pod
+  failed_when: >-
+    r_verify_test_ldap_server_pod.resources | length != 1 or
+    not r_verify_test_ldap_server_pod.resources[0] | json_query("status.conditions[?type=='Ready'].status|[0]") | bool
+  ignore_errors: true
+  until: r_verify_test_ldap_server_pod is successful
+  retries: 30
+  delay: 5

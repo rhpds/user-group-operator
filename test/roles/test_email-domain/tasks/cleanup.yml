@@ -1,0 +1,72 @@
+---
+- name: Cleanup for test-email-domain UserGroupConfig
+  kubernetes.core.k8s:
+    state: absent
+    api_version: usergroup.pfe.redhat.com/v1
+    kind: UserGroupConfig
+    name: test-email-domain
+
+- name: Cleanup Users
+  kubernetes.core.k8s:
+    state: absent
+    api_version: user.openshift.io/v1
+    kind: User
+    name: "{{ __user_name }}"
+  loop:
+  - test-email-domain-0
+  - test-email-domain-1
+  - test-email-domain-2
+  loop_control:
+    loop_var: __user_name
+
+- name: Cleanup Identities
+  kubernetes.core.k8s:
+    state: absent
+    api_version: user.openshift.io/v1
+    kind: Identity
+    name: "{{ __identity_name }}"
+  loop:
+  - user-group-operator-test:test-email-domain-0
+  - user-group-operator-test:test-email-domain-1
+  - user-group-operator-test:test-email-domain-2
+  loop_control:
+    loop_var: __identity_name
+
+- name: Cleanup Group test-email-domain.example.com
+  kubernetes.core.k8s:
+    state: absent
+    api_version: user.openshift.io/v1
+    kind: Group
+    name: test-email-domain.example.com
+
+- name: Get list of UserGroupMembers
+  kubernetes.core.k8s_info:
+    api_version: usergroup.pfe.redhat.com/v1
+    kind: UserGroupMember
+    label_selectors:
+    - usergroup.pfe.redhat.com/config=test-email-domain
+  register: r_user_group_members
+
+- name: Remove finalizers for UserGroupMembers
+  kubernetes.core.k8s:
+    api_version: usergroup.pfe.redhat.com/v1
+    kind: UserGroupMember
+    name: "{{ __user_group_member.metadata.name }}"
+    definition:
+      metadata:
+        finalizers: []
+  loop: "{{ r_user_group_members.resources }}"
+  loop_control:
+    label: "{{ __user_group_member.metadata.name }}"
+    loop_var: __user_group_member
+
+- name: Cleanup UserGroupMembers
+  kubernetes.core.k8s:
+    state: absent
+    api_version: usergroup.pfe.redhat.com/v1
+    kind: UserGroupMember
+    name: "{{ __user_group_member.metadata.name }}"
+  loop: "{{ r_user_group_members.resources }}"
+  loop_control:
+    label: "{{ __user_group_member.metadata.name }}"
+    loop_var: __user_group_member

@@ -1,0 +1,108 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-ldap-server
+
+data:
+  database.ldif: |
+    version: 1
+
+    dn: ou=Users,dc=example,dc=com
+    changetype: add
+    objectClass: organizationalUnit
+    objectClass: top
+    ou: Users
+
+    dn: ou=Groups,dc=example,dc=com
+    changetype: add
+    objectClass: organizationalUnit
+    objectClass: top
+    ou: Groups
+
+    dn: uid=alice,ou=Users,dc=example,dc=com
+    changetype: add
+    objectClass: organizationalPerson
+    objectClass: person
+    objectClass: inetOrgPerson
+    objectClass: top
+    cn: Alice Liddle
+    givenName: Alice
+    sn: Liddle
+    uid: alice
+    mail: alice@example.com
+
+    dn: uid=bob,ou=Users,dc=example,dc=com
+    changetype: add
+    objectClass: organizationalPerson
+    objectClass: person
+    objectClass: inetOrgPerson
+    objectClass: top
+    cn: Bob Dobbs
+    givenName: Bob
+    sn: Dobbs
+    uid: bob
+    mail: bob@example.com
+
+    dn: uid=carole,ou=Users,dc=example,dc=com
+    changetype: add
+    objectClass: organizationalPerson
+    objectClass: person
+    objectClass: inetOrgPerson
+    objectClass: top
+    cn: Carole Lombard
+    givenName: Carole
+    sn: Lombard
+    uid: carole
+    mail: carole@example.com
+
+    dn: uid=dorthy,ou=Users,dc=example,dc=com
+    changetype: add
+    objectClass: organizationalPerson
+    objectClass: person
+    objectClass: inetOrgPerson
+    objectClass: top
+    cn: Dorthy Gale
+    givenName: Dorthy
+    sn: Gale
+    uid: dorthy
+    mail: dorthy@example.com
+
+    dn: uid=edna,ou=Users,dc=example,dc=com
+    changetype: add
+    objectClass: organizationalPerson
+    objectClass: person
+    objectClass: inetOrgPerson
+    objectClass: top
+    cn: Edna Mode
+    givenName: Edna
+    sn: Mode
+    uid: edna
+    mail: edna@example.com
+
+    dn: uid=frank,ou=Users,dc=example,dc=com
+    changetype: add
+    objectClass: organizationalPerson
+    objectClass: person
+    objectClass: inetOrgPerson
+    objectClass: top
+    cn: Frank Booth
+    givenName: Frank
+    sn: Booth
+    uid: frank
+    mail: frank@example.com
+
+    dn: cn=Admin,ou=Groups,dc=example,dc=com
+    changetype: add
+    objectClass: groupOfUniqueNames
+    objectClass: top
+    cn: Admin
+    uniqueMember: uid=alice,ou=Users,dc=example,dc=com
+    uniqueMember: uid=bob,ou=Users,dc=example,dc=com
+
+    dn: cn=Dev,ou=Groups,dc=example,dc=com
+    changetype: add
+    objectClass: groupOfUniqueNames
+    objectClass: top
+    cn: Dev
+    uniqueMember: uid=bob,ou=Users,dc=example,dc=com
+    uniqueMember: uid=carole,ou=Users,dc=example,dc=com

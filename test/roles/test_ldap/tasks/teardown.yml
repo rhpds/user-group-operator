@@ -1,0 +1,48 @@
+---
+- name: Delete test-ldap-server Deployment
+  kubernetes.core.k8s:
+    state: absent
+    api_version: apps/v1
+    kind: Deployment
+    name: test-ldap-server
+    namespace: "{{ test_namespace }}"
+
+- name: Delete test-ldap-server Service
+  kubernetes.core.k8s:
+    state: absent
+    api_version: v1
+    kind: Service
+    name: test-ldap-server
+    namespace: "{{ test_namespace }}"
+
+- name: Delete test-ldap-server ConfigMap
+  kubernetes.core.k8s:
+    state: absent
+    api_version: v1
+    kind: ConfigMap
+    name: test-ldap-server
+    namespace: "{{ test_namespace }}"
+
+- name: Delete test-ldap-server RoleBinding
+  kubernetes.core.k8s:
+    state: absent
+    api_version: rbac.authorization.k8s.io/v1
+    kind: RoleBinding
+    name: test-ldap-server
+    namespace: "{{ test_namespace }}"
+
+- name: Delete test-ldap-server ServiceAccount
+  kubernetes.core.k8s:
+    state: absent
+    api_version: v1
+    kind: ServiceAccount
+    name: test-ldap-server
+    namespace: "{{ test_namespace }}"
+
+- name: Delete test-ldap-server ClusterRole
+  kubernetes.core.k8s:
+    state: absent
+    api_version: rbac.authorization.k8s.io/v1
+    kind: ClusterRole
+    name: "{{ test_namespace }}:test-ldap-server"
+

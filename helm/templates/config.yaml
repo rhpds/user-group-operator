@@ -1,6 +1,6 @@
 {{- if .Values.config.create }}
 ---
-apiVersion: usergroup.gpte.redhat.com/v1
+apiVersion: usergroup.pfe.redhat.com/v1
 kind: UserGroupConfig
 metadata:
   name: cluster

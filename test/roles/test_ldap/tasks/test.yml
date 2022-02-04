@@ -1,0 +1,260 @@
+---
+- name: Create User test-ldap-alice
+  kubernetes.core.k8s:
+    definition:
+      apiVersion: user.openshift.io/v1
+      kind: User
+      metadata:
+        name: test-ldap-alice
+      identities:
+      - user-group-operator-test:test-ldap-alice
+  register: r_create_user_alice
+
+- name: Create Identity user-group-operator-test:test-ldap-alice
+  kubernetes.core.k8s:
+    definition:
+      apiVersion: user.openshift.io/v1
+      kind: Identity
+      metadata:
+        name: user-group-operator-test:test-ldap-alice
+      extra:
+        email: alice@example.com
+        name: Alice Liddle
+        preferred_username: test-ldap-alice
+      providerName: user-group-operator-test
+      providerUserName: test-ldap-alice
+      user:
+        name: test-ldap-alice
+        uid: "{{ r_create_user_alice.result.metadata.uid }}"
+
+- name: Create test-ldap UserGroupConfig
+  kubernetes.core.k8s:
+    definition:
+      apiVersion: usergroup.pfe.redhat.com/v1
+      kind: UserGroupConfig
+      metadata:
+        name: test-ldap
+      spec:
+        ldap:
+        - attributeToGroup:
+          - attribute: memberOf
+            valueToGroup:
+            - group: test-ldap-admin
+              value: cn=Admin,ou=Groups,dc=example,dc=com
+            - group: test-ldap-dev
+              value: cn=Dev,ou=Groups,dc=example,dc=com
+          authSecret:
+            name: test-ldap-auth
+            namespace: "{{ test_namespace }}"
+          identityProviderName: user-group-operator-test
+          insecure: true
+          url: ldap://test-ldap-server
+          userBaseDN: ou=Users,dc=example,dc=com
+          userSearchAttribute: mail
+          userSearchValue: email
+          userObjectClass: inetOrgPerson
+        refresh_interval: 10
+
+- name: Create test-ldap-auth Secret
+  kubernetes.core.k8s:
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: test-ldap-auth
+        namespace: "{{ test_namespace }}"
+      data:
+        bindDN: "{{ 'cn=admin,dc=example,dc=com' | b64encode }}"
+        bindPassword: "{{ 'admin' | b64encode }}"
+
+- name: Verify UserGroupMember created for test-ldap-alice
+  kubernetes.core.k8s_info:
+    api_version: usergroup.pfe.redhat.com/v1
+    kind: UserGroupMember
+    label_selectors:
+    - usergroup.pfe.redhat.com/config=test-ldap
+    - usergroup.pfe.redhat.com/user-uid={{ r_create_user_alice.result.metadata.uid }}
+  register: r_verify_user_group_member
+  failed_when: >-
+    r_verify_user_group_member.resources | length != 1 or
+    r_verify_user_group_member.resources[0].spec.group.name != 'test-ldap-admin' or
+    r_verify_user_group_member.resources[0].spec.identity.name != 'user-group-operator-test:test-ldap-alice' or
+    r_verify_user_group_member.resources[0].spec.user.name != 'test-ldap-alice'
+  until: r_verify_user_group_member is success
+  retries: 10
+  delay: 1
+
+- name: Verify Group test-ldap-admin has user test-ldap-alice
+  kubernetes.core.k8s_info:
+    api_version: user.openshift.io/v1
+    kind: Group
+    name: test-ldap-admin
+  register: r_verify_admin_group
+  failed_when: >-
+    r_verify_admin_group.resources | length != 1 or
+    r_verify_admin_group.resources[0].users != ['test-ldap-alice']
+  until: r_verify_admin_group is success
+  retries: 10
+  delay: 1
+
+- name: Create User test-ldap-bob
+  kubernetes.core.k8s:
+    definition:
+      apiVersion: user.openshift.io/v1
+      kind: User
+      metadata:
+        name: test-ldap-bob
+      identities:
+      - user-group-operator-test:test-ldap-bob
+  register: r_create_user_bob
+
+- name: Create Identity user-group-operator-test:test-ldap-bob
+  kubernetes.core.k8s:
+    definition:
+      apiVersion: user.openshift.io/v1
+      kind: Identity
+      metadata:
+        name: user-group-operator-test:test-ldap-bob
+      extra:
+        email: bob@example.com
+        name: Bob Dobbs
+        preferred_username: test-ldap-bob
+      providerName: user-group-operator-test
+      providerUserName: test-ldap-bob
+      user:
+        name: test-ldap-bob
+        uid: "{{ r_create_user_bob.result.metadata.uid }}"
+  register: r_create_identity_bob
+
+- name: Verify UserGroupMembers created for test-ldap-bob
+  kubernetes.core.k8s_info:
+    api_version: usergroup.pfe.redhat.com/v1
+    kind: UserGroupMember
+    label_selectors:
+    - usergroup.pfe.redhat.com/config=test-ldap
+    - usergroup.pfe.redhat.com/user-uid={{ r_create_user_bob.result.metadata.uid }}
+  register: r_verify_user_group_member
+  vars:
+    _admin_user_group_member: >-
+      {{ r_verify_user_group_member.resources | json_query("[?spec.group.name=='test-ldap-admin']|[0]") }}
+    _dev_user_group_member: >-
+      {{ r_verify_user_group_member.resources | json_query("[?spec.group.name=='test-ldap-dev']|[0]") }}
+  failed_when: >-
+    r_verify_user_group_member.resources | length != 2 or
+    _admin_user_group_member.spec.identity.name != 'user-group-operator-test:test-ldap-bob' or
+    _admin_user_group_member.spec.user.name != 'test-ldap-bob' or
+    _dev_user_group_member.spec.identity.name != 'user-group-operator-test:test-ldap-bob' or
+    _dev_user_group_member.spec.user.name != 'test-ldap-bob'
+  until: r_verify_user_group_member is success
+  retries: 10
+  delay: 1
+
+- name: Verify Group test-ldap-admin has user test-ldap-bob
+  kubernetes.core.k8s_info:
+    api_version: user.openshift.io/v1
+    kind: Group
+    name: test-ldap-admin
+  register: r_verify_admin_group
+  failed_when: >-
+    r_verify_admin_group.resources | length != 1 or
+    r_verify_admin_group.resources[0].users != ['test-ldap-alice', 'test-ldap-bob']
+  until: r_verify_admin_group is success
+  retries: 10
+  delay: 1
+
+- name: Verify Group test-ldap-dev has user test-ldap-bob
+  kubernetes.core.k8s_info:
+    api_version: user.openshift.io/v1
+    kind: Group
+    name: test-ldap-dev
+  register: r_verify_dev_group
+  failed_when: >-
+    r_verify_dev_group.resources | length != 1 or
+    r_verify_dev_group.resources[0].users != ['test-ldap-bob']
+  until: r_verify_dev_group is success
+  retries: 10
+  delay: 1
+
+- name: Create User test-ldap-carole
+  kubernetes.core.k8s:
+    definition:
+      apiVersion: user.openshift.io/v1
+      kind: User
+      metadata:
+        name: test-ldap-carole
+      identities:
+      - user-group-operator-test:test-ldap-carole
+  register: r_create_user_carole
+
+- name: Create Identity user-group-operator-test:test-ldap-carole
+  kubernetes.core.k8s:
+    definition:
+      apiVersion: user.openshift.io/v1
+      kind: Identity
+      metadata:
+        name: user-group-operator-test:test-ldap-carole
+      extra:
+        email: carole@example.com
+        name: Carole Lombard
+        preferred_username: test-ldap-carole
+      providerName: user-group-operator-test
+      providerUserName: test-ldap-carole
+      user:
+        name: test-ldap-carole
+        uid: "{{ r_create_user_carole.result.metadata.uid }}"
+  register: r_create_identity_carole
+
+- name: Create rogue UserGroupMember for carole
+  kubernetes.core.k8s:
+    definition:
+      apiVersion: usergroup.pfe.redhat.com/v1
+      kind: UserGroupMember
+      metadata:
+        annotations:
+          usergroup.pfe.redhat.com/group-name: test-ldap-admin
+          usergroup.pfe.redhat.com/user-name: test-ldap-carole
+        finalizers:
+        - usergroup.pfe.redhat.com
+        labels:
+          usergroup.pfe.redhat.com/config: test-ldap
+          usergroup.pfe.redhat.com/group-uid: "{{ __group_admin_uid }}"
+          usergroup.pfe.redhat.com/user-uid: "{{ __user_carole_uid }}"
+        name: test-ldap-admin.{{ __user_carole_uid }}
+        ownerReferences:
+        - apiVersion: user.openshift.io/v1
+          blockOwnerDeletion: false
+          controller: true
+          kind: User
+          name: test-ldap-carole
+          uid: "{{ __user_carole_uid }}"
+      spec:
+        group:
+          apiVersion: user.openshift.io/v1
+          kind: Group
+          name: test-ldap-admin
+          uid: "{{ __group_admin_uid }}"
+        identity:
+          apiVersion: user.openshift.io/v1
+          kind: Identity
+          name: user-group-operator-test:test-ldap-carole
+          uid: "{{ __identity_carole_uid }}"
+        user:
+          apiVersion: user.openshift.io/v1
+          kind: User
+          name: test-ldap-carole
+          uid: "{{ __user_carole_uid }}"
+  vars:
+    __group_admin_uid: "{{ r_verify_admin_group.resources[0].metadata.uid }}"
+    __identity_carole_uid: "{{ r_create_identity_carole.result.metadata.uid }}"
+    __user_carole_uid: "{{ r_create_user_carole.result.metadata.uid }}"
+
+- name: Confirm that rogue UserGroupMember for carole is deleted
+  kubernetes.core.k8s_info:
+    api_version: usergroup.pfe.redhat.com/v1
+    kind: UserGroupMember
+    name: test-ldap-admin.{{ r_create_identity_carole.result.metadata.uid }}
+  register: r_verify_user_group_member
+  failed_when: >-
+    r_verify_user_group_member.resources | length != 0
+  retries: 10
+  delay: 2
