@@ -11,6 +11,7 @@ import threading
 import time
 
 from base64 import b64decode
+from hashlib import sha256
 
 operator_domain = os.environ.get('OPERATOR_DOMAIN', 'usergroup.pfe.redhat.com')
 operator_version = os.environ.get('OPERATOR_VERSION', 'v1')
@@ -390,6 +391,7 @@ class UserGroupConfigLDAP:
             UserGroupConfigLDAPAttributeToGroup(item) for item in definition['attributeToGroup']
         ] if 'attributeToGroup' in definition else None
         self.auth_secret = UserGroupConfigLDAPAuthSecret(definition['authSecret'])
+        self.ca_cert = definition.get('caCert')
         self.identity_provider_name = definition.get('identityProviderName')
         self.insecure = definition.get('insecure', False)
         self.url = definition['url']
@@ -397,7 +399,6 @@ class UserGroupConfigLDAP:
         self.user_object_class = definition.get('userObjectClass', 'inetOrgPerson')
         self.user_search_attribute = definition.get('userSearchAttribute', 'uid')
         self.user_search_value = definition.get('userSearchValue', 'name')
-        self._connection = None
 
     @property
     def bind_dn(self):
@@ -406,6 +407,16 @@ class UserGroupConfigLDAP:
     @property
     def bind_password(self):
         return self.auth_secret.bind_password
+
+    @property
+    def ca_cert_file(self):
+        if not self.ca_cert:
+            return None
+        file_path = os.path.join('/tmp', sha256(self.ca_cert.encode('utf-8')).hexdigest())
+        if not os.path.exists(file_path):
+            with open(file_path, 'w') as f:
+                f.write(self.ca_cert)
+        return file_path
 
     def get_group_names(self, user, identity, logger):
         group_names = set()
@@ -467,6 +478,7 @@ class UserGroupConfigLDAP:
         server = ldap3.Server(
             server,
             tls = ldap3.Tls(
+                ca_certs_file = self.ca_cert_file,
                 validate = ssl.CERT_NONE if self.insecure else ssl.CERT_REQUIRED,
                 version = ssl.PROTOCOL_TLSv1
             ),

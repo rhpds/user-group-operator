@@ -9,14 +9,35 @@ namespace:
   # If not set and create is true, a name is generated using the name template
   name:
 
-config:
-  create: true
-  emailDomainGroups:
-    enable: false
-    prefix: email-domain.
-  identityProviderGroups:
-    enable: false
-    prefix: identity-provider.
+#config:
+#  emailDomainGroups:
+#    enable: false
+#    prefix: email-domain.
+#  identityProviderGroups:
+#    enable: false
+#    prefix: identity-provider.
+#  ldap:
+#  - url: ldaps://ipa.example.com
+#    authSecret:
+#      name: ldap-auth
+#    caCert: |
+#      -----BEGIN CERTIFICATE-----
+#      ...
+#      -----END CERTIFICATE-----
+#    userBaseDN: cn=users,dc=example,dc=com
+#    userObjectClass: inetOrgPerson
+#    userSearchAttribute: mail
+#    userSearchValue: email
+#    attributeToGroup:
+#    - attribute: memberOf
+#      valueToGroup:
+#      - group: admins
+#        value: cn=admins,cn=groups,dc=example,dc=com
+
+#ldapSecrets:
+#- name: ldap-auth
+#  bindDn: uid=reader,cn=users,dc=example,dc=com
+#  bindPassword: password
 
 deploy: true
 replicaCount: 1

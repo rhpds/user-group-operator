@@ -1,12 +1,20 @@
-{{- if .Values.config.create }}
+{{- if .Values.config }}
 ---
 apiVersion: usergroup.pfe.redhat.com/v1
 kind: UserGroupConfig
 metadata:
   name: cluster
 spec:
+  {{- if .Values.config.emailDomainGroups }}
   emailDomainGroups:
     {{- toYaml .Values.config.emailDomainGroups | nindent 4 }}
+  {{- end }}
+  {{- if .Values.config.emailDomainGroups }}
   identityProviderGroups:
     {{- toYaml .Values.config.identityProviderGroups | nindent 4 }}
+  {{- end }}
+  {{- if .Values.config.ldap }}
+  ldap:
+    {{- toYaml .Values.config.ldap | nindent 4 }}
+  {{- end }}
 {{- end }}

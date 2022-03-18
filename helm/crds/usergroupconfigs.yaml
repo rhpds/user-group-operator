@@ -130,6 +130,10 @@ spec:
                             Namespace of the ldap authentication secret.
                             If not provided then the namespace of the operator will be assumed.
                           type: string
+                    caCert:
+                      description: >-
+                        TLS certificate authority certificate for validating TLS connections.
+                      type: string
                     identityProviderName:
                       description: >-
                         Identity provider name for which to check this LDAP directory.
