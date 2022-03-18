@@ -364,20 +364,33 @@ class UserGroupConfig:
 
     def _manage_groups(self, logger):
         _continue = None
+        last_processed_user_name = None
         while True:
-            user_list = custom_objects_api.list_cluster_custom_object(
-                'user.openshift.io', 'v1', 'users',
-                _continue = _continue,
-                limit = 50,
-            )
-            for user_definition in user_list.get('items', []):
-                user = User(user_definition)
-                identity = Identity.get(user.identity, retries=1, retry_delay=0.5)
-                if identity:
-                    self.manage_user_group_members(user, identity, logger)
-            _continue = user_list['metadata'].get('continue')
-            if not _continue:
-                break
+            try:
+                user_list = custom_objects_api.list_cluster_custom_object(
+                    'user.openshift.io', 'v1', 'users',
+                    _continue = _continue,
+                    limit = 50,
+                )
+                for user_definition in user_list.get('items', []):
+                    user = User(user_definition)
+                    if last_processed_user_name and last_processed_user_name < user.name:
+                        continue
+                    else:
+                        last_processed_user_name = user.name
+                    identity = Identity.get(user.identity, retries=1, retry_delay=0.5)
+                    if identity:
+                        self.manage_user_group_members(user, identity, logger)
+                _continue = user_list['metadata'].get('continue')
+                if not _continue:
+                    break
+            except kubernetes.client.rest.ApiException as e:
+                logger.info("Resetting user list for group management")
+                if e.status == 409:
+                    # Query expired before completion, reset.
+                    _continue = None
+                else:
+                    raise
 
     def unregister(self):
         return UserGroupConfig.__configs.pop(self.name)
