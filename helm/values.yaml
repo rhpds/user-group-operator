@@ -33,11 +33,28 @@ namespace:
 #      valueToGroup:
 #      - group: admins
 #        value: cn=admins,cn=groups,dc=example,dc=com
+#  salesforce:
+#  - url: https://login.salesforce.com
+#    consumerKey: ...
+#    consumerSecret:
+#      name: salesforce-consumer-secret
+#   fieldToGroup:
+#   - name: partnerTier
+#   userSearchField: federationId
+#   userSearchValue: name
+#   username: username@example.com
 
 #ldapSecrets:
 #- name: ldap-auth
 #  bindDn: uid=reader,cn=users,dc=example,dc=com
 #  bindPassword: password
+
+#salesforceSecrets:
+#- name: salesforce-consumer-secret
+#  consumerSecret: |
+#    -----BEGIN PRIVATE KEY-----
+#    ...
+#    -----END PRIVATE KEY-----
 
 deploy: true
 replicaCount: 1
