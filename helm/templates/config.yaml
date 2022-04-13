@@ -16,8 +16,9 @@ spec:
   {{- if .Values.config.ldap }}
   ldap:
     {{- toYaml .Values.config.ldap | nindent 4 }}
+  {{- end }}
   {{- if .Values.config.salesforce }}
-  ldap:
+  salesforce:
     {{- toYaml .Values.config.salesforce | nindent 4 }}
   {{- end }}
 {{- end }}
