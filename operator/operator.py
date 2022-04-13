@@ -6,9 +6,12 @@ import ldap3
 import logging
 import os
 import re
+import simple_salesforce
 import ssl
+import tempfile
 import threading
 import time
+
 
 from base64 import b64decode
 from hashlib import sha256
@@ -275,6 +278,9 @@ class UserGroupConfig:
         self.ldap = [
             UserGroupConfigLDAP(item) for item in spec['ldap']
         ] if 'ldap' in self.spec else []
+        self.salesforce = [
+            UserGroupConfigSalesforce(item) for item in spec['salesforce']
+        ] if 'salesforce' in self.spec else []
         self._lock = threading.Lock()
 
     @property
@@ -334,6 +340,11 @@ class UserGroupConfig:
         for ldap in self.ldap:
             group_names.update(
                 ldap.get_group_names(user, identity, logger)
+            )
+
+        for salesforce in self.salesforce:
+            group_names.update(
+                salesforce.get_group_names(user, identity, logger)
             )
 
         for group_name in group_names:
@@ -469,7 +480,7 @@ class UserGroupConfigLDAP:
                 values = reader[0][attribute.attribute].values
                 for value in values:
                     value = str(value)
-                    default_group_name = f"{attribute.attribute}-{value}"
+                    default_group_name = f"ldap-{attribute.attribute}-{value}"
                     if attribute_to_group.value_to_group:
                         for value_to_group in attribute_to_group.value_to_group:
                             if value == value_to_group.value:
@@ -575,11 +586,132 @@ class UserGroupConfigLDAPAuthSecret:
                     raise
 
 
+class UserGroupConfigSalesforce:
+    def __init__(self, definition):
+        self.consumer_key = definition['consumerKey']
+        self.consumer_secret = UserGroupConfigSalesforceConsumerSecret(definition['consumerSecret'])
+        self.field_to_group = [
+            UserGroupConfigSalesforceFieldToGroup(item) for item in definition['fieldToGroup']
+        ] if 'fieldToGroup' in definition else None
+        self.identity_provider_name = definition.get('identityProviderName')
+        self.url = definition.get('url', 'https://login.salesforce.com')
+        self.user_search_field = definition.get('userSearchField', 'federationId')
+        self.user_search_value = definition.get('userSearchValue', 'name')
+        self.username = definition['username']
+
+    def get_group_names(self, user, identity, logger):
+        group_names = set()
+
+        # If restricted to an identity provider then check match
+        if self.identity_provider_name \
+        and self.identity_provider_name != identity.provider_name:
+            return group_names
+
+        search_value = user.name if self.user_search_value == 'name' else identity.extra.get(self.user_search_value)
+        if not search_value:
+            return group_names
+
+        salesforce_api = self.salesforce_api()
+        salesforce_user = salesforce_api.apexecute(f"vendor/user/lookup?{self.user_search_field}={search_value}", method='GET')
+
+        for field_to_group in self.field_to_group:
+            value = salesforce_user.get(field_to_group.name)
+            default_group_name = f"salesforce-{field_to_group.name}-{value}"
+            if not value:
+                continue
+            if field_to_group.value_to_group:
+                for value_to_group in field_to_group.value_to_group:
+                    if value == value_to_group.value:
+                        group_names.add(value_to_group.group or default_group_name)
+            else:
+                group_names.add(default_group_name)
+
+        return group_names
+
+    def salesforce_api(self):
+        return simple_salesforce.Salesforce(
+            instance_url = self.url,
+            username = self.username,
+            consumer_key = self.consumer_key,
+            privatekey_file = self.consumer_secret.file_path,
+        )
+
+
+class UserGroupConfigSalesforceConsumerSecret:
+    def __init__(self, definition):
+        self.name = definition['name']
+        self._tempfile = None
+        self._lock = threading.Lock()
+        if 'namespace' in definition:
+            self.namespace = definition['namespace']
+        else:
+            try:
+                # Try getting namespace within cluster
+                with open('/run/secrets/kubernetes.io/serviceaccount/namespace') as f:
+                    self.namespace = f.read()
+            except FileNotfoundError:
+                # Running locally?
+                self.namespace = kubernetes.config.list_kube_config_contexts()[1]['context']['namespace']
+
+    def __del__(self):
+        if self._tempfile:
+            os.unlink(self._tempfile.name)
+
+    @property
+    def file_path(self):
+        if self._tempfile:
+            return self._tempfile.name
+        with self._lock:
+            if not self._tempfile:
+                self._read_secret_to_tempfile()
+        return self._tempfile.name
+
+    def _read_secret_to_tempfile(self):
+        '''
+        Attempt to read Salesforce client secret with retries in case the configuration was created befor the secret.
+        '''
+        attempt = 0
+        while True:
+            try:
+                secret = core_v1_api.read_namespaced_secret(self.name, self.namespace)
+                secret_keys = secret.data.keys()
+                if secret_keys == 1:
+                    client_secret_key = secret_keys[1]
+                elif 'tls.key' in secret_keys:
+                    client_secret_key = 'tls.key'
+                else:
+                    raise Exception(f"Salesforce client secret {self.name} in {self.namespace} has more than one data item and no tls.key!")
+                self._tempfile = tempfile.NamedTemporaryFile(delete=False)
+                self._tempfile.write(b64decode(secret.data[client_secret_key]))
+                self._tempfile.close()
+                return
+            except kubernetes.client.rest.ApiException as e:
+                if e.status == 404 and attempt < 10:
+                    attempt += 1
+                    time.sleep(0.5)
+                else:
+                    raise
+
+
+class UserGroupConfigSalesforceFieldToGroup:
+    def __init__(self, definition):
+        self.name = definition['name']
+        self.value_to_group = [
+            UserGroupConfigSalesforceFieldValueToGroup(item) for item in definition['valueToGroup']
+        ] if 'valueToGroup' in definition else None
+
+
+class UserGroupConfigSalesforceFieldValueToGroup:
+    def __init__(self, definition):
+        self.group = definition.get('group')
+        self.value = definition['value']
+
+
 class UserGroupMember:
     @staticmethod
     def create(config, group_name, identity, logger, user):
         group = Group.get(group_name)
-        name = f"{group_name}.{user.uid}"
+        name = f"{group_name.lower()}.{user.uid}"
         try:
             definition = {
                 "apiVersion": "usergroup.pfe.redhat.com/v1",

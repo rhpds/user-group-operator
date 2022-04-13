@@ -179,3 +179,95 @@ spec:
                   Default 3600 (1 hour).
                 type: integer
                 minimum: 10
+              salesforce:
+                description: >-
+                  Configuration to lookup user in Salesforce.com (SFDC) API
+                type: array
+                items:
+                  type: object
+                  required:
+                  - consumerKey
+                  - consumerSecret
+                  - username
+                  properties:
+                    consumerKey:
+                      description: >-
+                        Salesforce client consumer key value.
+                      type: string
+                    consumerSecret:
+                      description: >-
+                        Reference to Secret which must contain a data item named "client.pem" containing the client secret.
+                      type: object
+                      required:
+                      - name
+                      properties:
+                        name:
+                          description: >-
+                            Name of the salesforce client secret.
+                          type: string
+                        namespace:
+                          description: >-
+                            Namespace of the salesforce client secret.
+                            If not provided then the namespace of the operator will be assumed.
+                          type: string
+                    fieldToGroup:
+                      description: >-
+                        Salesforce user field to map to OpenShift groups.
+                      type: array
+                      items:
+                        type: object
+                        required:
+                        - name
+                        properties:
+                          name:
+                            description: >-
+                              Salesforce user field name.
+                            type: string
+                          valueToGroup:
+                            description: >-
+                              Specific values to match to groups.
+                              If none are specified then all values will be mapped to groups.
+                            type: array
+                            items:
+                              type: object
+                              required:
+                              - value
+                              properties:
+                                group:
+                                  description: >-
+                                    OpenShift group name to associate to the user entry.
+                                  type: string
+                                value:
+                                  description: >-
+                                    Specific value to match for this attribute.
+                                  type: string
+                    identityProviderName:
+                      description: >-
+                        Identity provider name for which to perform Salesforce lookups.
+                        If not specified then an attempt will be made to lookup all users.
+                      type: string
+                    url:
+                      description: >-
+                        Salesforce instance URL.
+                        Default if not specified: "https://login.salesforce.com".
+                      type: string
+                      pattern: '^ldaps?://[a-z0-9\-_.]+(:[0-9]+)?$'
+                    username:
+                      description: >-
+                        Salesforce API username.
+                      type: string
+                    userSearchField:
+                      description: >-
+                        Salesforce user attribute used to match to user name.
+                        Default, "federationId".
+                      type: string
+                    userSearchValue:
+                      description: >-
+                        Value from the User or Identity to match the userSearchField.
+                        `name` uses the value of the User name.
+                        Any other values are looked up in Identity `extra` data.
+                        Default `name`.
+                      type: string
+          status:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true

@@ -104,3 +104,43 @@ stringData:
   bindPassword: password
 ----------------------------------------
 
+### Salesforce Group Mapping
+
+The user-group-operator includes support for looking up users against the Salesforce.com (SFDC) API and map user fields to group membership.
+
+The configuration below maps users by name to the Salesforce `federationId` field.
+User groups are created according to the value of the `partnerTier` field.
+Group names will use the default `salesforce-partnerTier-<VALUE>` group name.
+Similar to the LDAP example above, a `valueToGroup` can be given to control which field values will map to groups.
+
+---------------------------------------------------
+apiVersion: usergroup.pfe.redhat.com/v1
+kind: UserGroupConfig
+metadata:
+  name: salesforce
+spec:
+  salesforce:
+  - consumerKey: <Salesforce Consumer Key>
+    consumerSecret:
+      name: salesforce-consumer-secret
+    fieldToGroup:
+    - name: partnerTier
+    url: https://login.salesforce.com
+    userSearchField: federationId
+    userSearchValue: name
+    username: username@example.com
+---------------------------------------------------
+
+Example Salesforce consumer secret:
+
+----------------------------------------
+apiVersion: v1
+kind: Secret
+metadata:
+  name: salesforce-consumer-secret
+stringData:
+  tls.key: |
+    -----BEGIN PRIVATE KEY-----
+    ...
+    -----END PRIVATE KEY-----
+----------------------------------------
