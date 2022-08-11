@@ -12,9 +12,11 @@ import tempfile
 import threading
 import time
 
-
 from base64 import b64decode
 from hashlib import sha256
+
+from configure_kopf_logging import configure_kopf_logging
+from infinite_relative_backoff import InfiniteRelativeBackoff
 
 operator_domain = os.environ.get('OPERATOR_DOMAIN', 'usergroup.pfe.redhat.com')
 operator_version = os.environ.get('OPERATOR_VERSION', 'v1')
@@ -155,8 +157,6 @@ class Group:
 class Identity:
     @staticmethod
     def get(name, retries=0, retry_delay=1):
-        if not name:
-            return
         while True:
             try:
                 definition = custom_objects_api.get_cluster_custom_object(
@@ -164,13 +164,11 @@ class Identity:
                 )
                 return Identity(definition)
             except kubernetes.client.rest.ApiException as e:
-                if e.status != 404:
+                if retries > 0:
+                    time.sleep(retry_delay)
+                    retries -= 1;
+                else:
                     raise
-            if retries == 0:
-                break
-            else:
-                time.sleep(retry_delay)
-                retries -= 1;
 
     def __init__(self, definition):
         self.extra = definition.get('extra', {})
@@ -201,31 +199,10 @@ class Identity:
         return self.metadata['uid']
 
 
-class InfiniteRelativeBackoff:
-    def __init__(self, initial_delay=0.1, scaling_factor=2, maximum=60):
-        self.initial_delay = initial_delay
-        self.scaling_factor = scaling_factor
-        self.maximum = maximum
-
-    def __iter__(self):
-        delay = self.initial_delay
-        while True:
-            if delay > self.maximum:
-                yield self.maximum
-            else:
-                yield delay
-                delay *= self.scaling_factor
-
-
 class User:
     def __init__(self, definition, logger=None):
-        self.identities = definition.get('identities', [])
+        self.identities = definition.get('identities')
         self.metadata = definition['metadata']
-
-    @property
-    def identity(self):
-        if self.identities:
-            return self.identities[0]
 
     @property
     def name(self):
@@ -244,11 +221,17 @@ class User:
     def uid(self):
         return self.metadata['uid']
 
+    def get_identities(self, logger, retries=0, retry_delay=1):
+        if not self.identities:
+            return []
+        identities = []
+        for identity_name in self.identities:
+            identities.append(Identity.get(identity_name, retries=3, retry_delay=0.5))
+        return identities
+
     def manage_groups(self, logger):
         for config in UserGroupConfig.list():
-            identity = Identity.get(self.identity, retries=3, retry_delay=0.5)
-            if identity:
-                config.manage_user_group_members(self, identity, logger)
+            config.manage_user_group_members(self, logger)
 
 
 class UserGroupConfig:
@@ -326,35 +309,50 @@ class UserGroupConfig:
                 operator_domain, operator_version, 'usergroupmembers', user_group_member_name
             )
 
-    def manage_user_group_members(self, user, identity, logger):
+    def manage_user_group_members(self, user, logger):
+        logger.info(f"Managing user {user.name}")
         group_names = set()
-        if self.identity_provider_groups_enabled:
-            group_names.add(self.identity_provider_groups_prefix + identity.provider_name)
 
-        if self.email_domain_groups_enabled:
-            email = identity.email
-            if email and '@' in email:
-                domain = email.split('@')[1]
-                group_names.add(self.email_domain_groups_prefix + domain)
+        for identity in user.get_identities(logger=logger):
+            identity_group_names = set()
 
-        for ldap in self.ldap:
-            group_names.update(
-                ldap.get_group_names(user, identity, logger)
-            )
+            if self.identity_provider_groups_enabled:
+                identity_group_names.add(
+                    self.identity_provider_groups_prefix + identity.provider_name
+                )
 
-        for salesforce in self.salesforce:
-            group_names.update(
-                salesforce.get_group_names(user, identity, logger)
-            )
+            if self.email_domain_groups_enabled:
+                email = identity.email
+                if email and '@' in email:
+                    domain = email.split('@')[1]
+                    identity_group_names.add(
+                        self.email_domain_groups_prefix + domain
+                    )
 
-        for group_name in group_names:
-            UserGroupMember.create(
-                config = self,
-                group_name = group_name,
-                identity = identity,
-                logger = logger,
-                user = user,
-            )
+            for ldap in self.ldap:
+                if not ldap.identity_provider_name \
+                or ldap.identity_provider_name == identity.provider_name:
+                    identity_group_names.update(
+                        ldap.get_group_names(user, identity, logger)
+                    )
+
+            for salesforce in self.salesforce:
+                if not salesforce.identity_provider_name \
+                or salesforce.identity_provider_name == identity.provider_name:
+                    identity_group_names.update(
+                        salesforce.get_group_names(user, identity, logger)
+                    )
+
+            for group_name in identity_group_names:
+                UserGroupMember.create(
+                    config = self,
+                    group_name = group_name,
+                    identity = identity,
+                    logger = logger,
+                    user = user,
+                )
+
+            group_names.update(identity_group_names)
 
         for user_group_member_definition in custom_objects_api.list_cluster_custom_object(
             operator_domain, operator_version, 'usergroupmembers',
@@ -367,7 +365,6 @@ class UserGroupConfig:
                 user_group_member_list = custom_objects_api.delete_cluster_custom_object(
                     operator_domain, operator_version, 'usergroupmembers', name
                 )
-
 
     def manage_groups(self, logger):
         with self._lock:
@@ -385,13 +382,12 @@ class UserGroupConfig:
                 )
                 for user_definition in user_list.get('items', []):
                     user = User(user_definition)
-                    if last_processed_user_name and last_processed_user_name < user.name:
+                    if last_processed_user_name and last_processed_user_name >= user.name:
+                        logger.info(f"Skipping {user.name}")
                         continue
                     else:
                         last_processed_user_name = user.name
-                    identity = Identity.get(user.identity, retries=1, retry_delay=0.5)
-                    if identity:
-                        self.manage_user_group_members(user, identity, logger)
+                    self.manage_user_group_members(user, logger)
                 _continue = user_list['metadata'].get('continue')
                 if not _continue:
                     break
@@ -480,7 +476,11 @@ class UserGroupConfigLDAP:
                 values = reader[0][attribute.attribute].values
                 for value in values:
                     value = str(value)
-                    default_group_name = f"ldap-{attribute.attribute}-{value}"
+                    if value.startswith('cn='):
+                        cn = value[3:].split(',', 1)[0]
+                        default_group_name = f"ldap-{attribute.attribute}-{cn}"
+                    else:
+                        default_group_name = f"ldap-{attribute.attribute}-{value}"
                     if attribute_to_group.value_to_group:
                         for value_to_group in attribute_to_group.value_to_group:
                             if value == value_to_group.value:
@@ -720,10 +720,12 @@ class UserGroupMember:
                     "name": name,
                     "annotations": {
                         "usergroup.pfe.redhat.com/group-name": group_name,
+                        "usergroup.pfe.redhat.com/identity-name": identity.name,
                         "usergroup.pfe.redhat.com/user-name": user.name,
                     },
                     "labels": {
                         "usergroup.pfe.redhat.com/config": config.name,
+                        "usergroup.pfe.redhat.com/identity-uid": identity.uid,
                         "usergroup.pfe.redhat.com/user-uid": user.uid,
                     },
                     "ownerReferences": [{
@@ -779,6 +781,9 @@ def configure(settings: kopf.OperatorSettings, **_):
     # Disable scanning for CustomResourceDefinitions updates
     settings.scanning.disabled = True
 
+    # Configure logging
+    configure_kopf_logging()
+
     # Preload all UserGroupConfig definitions
     for definition in custom_objects_api.list_cluster_custom_object(
         operator_domain, operator_version, 'usergroupconfigs'
@@ -796,9 +801,9 @@ def user_handler(event, logger, **_):
         user.manage_groups(logger)
 
 
-@kopf.on.create('usergroup.pfe.redhat.com', 'v1', 'usergroupconfigs')
-@kopf.on.resume('usergroup.pfe.redhat.com', 'v1', 'usergroupconfigs')
-@kopf.on.update('usergroup.pfe.redhat.com', 'v1', 'usergroupconfigs')
+@kopf.on.create('usergroup.pfe.redhat.com', 'v1', 'usergroupconfigs', id='usergroupconfig_create')
+@kopf.on.resume('usergroup.pfe.redhat.com', 'v1', 'usergroupconfigs', id='usergroupconfig_resume')
+@kopf.on.update('usergroup.pfe.redhat.com', 'v1', 'usergroupconfigs', id='usergroupconfig_update')
 def usergroupconfig_event(name, spec, logger, **_):
     config = UserGroupConfig.register(name=name, spec=spec)
     config.manage_groups(logger)
@@ -823,9 +828,9 @@ def usergroupmember_delete(name, spec, logger, **_):
     config.unregister()
 
 
-@kopf.on.create('usergroup.pfe.redhat.com', 'v1', 'usergroupmembers')
-@kopf.on.resume('usergroup.pfe.redhat.com', 'v1', 'usergroupmembers')
-@kopf.on.update('usergroup.pfe.redhat.com', 'v1', 'usergroupmembers')
+@kopf.on.create('usergroup.pfe.redhat.com', 'v1', 'usergroupmembers', id='usergroupmember_create')
+@kopf.on.resume('usergroup.pfe.redhat.com', 'v1', 'usergroupmembers', id='usergroupmember_resume')
+@kopf.on.update('usergroup.pfe.redhat.com', 'v1', 'usergroupmembers', id='usergroupmember_update')
 def usergroupmember_event(name, labels, meta, spec, logger, **_):
     group = Group.add_user(
         spec['group']['name'],
