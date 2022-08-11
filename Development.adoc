@@ -15,27 +15,26 @@ https://docs.openshift.com/container-platform/latest/cli_reference/developer_cli
 
 . Create resources required for development from helm chart:
 +
---------------------------------------------------
+------------------------------------------
 helm template helm/ \
 --include-crds \
---set config.create=false \
 --set deploy=false \
---set namespace.name=user-group-operator-dev \
+--set namespace.name=user-group-operator \
 | oc apply -f -
---------------------------------------------------
+------------------------------------------
 
 . Change project namespace to `user-group-operator-dev`:
 +
--------------------------------------------
-odo project set user-group-operator-dev
--------------------------------------------
+-----------------------------------
+odo project set user-group-operator
+-----------------------------------
 
 . Grant privileges for cluster role `user-group-operator` to default service account:
 +
--------------------------------------------------------------------------
+--------------------------------------------------------------------------------
 oc adm policy add-cluster-role-to-user user-group-operator -z default
-oc policy add-role-to-user --role-namespace=user-group-operator-dev user-group-operator -z default
--------------------------------------------------------------------------
+oc policy add-role-to-user --role-namespace=user-group-operator user-group-operator -z default
+--------------------------------------------------------------------------------
 
 . Setup `odo` from the provided `devfile.yaml`:
 +
@@ -58,9 +57,9 @@ odo push
 +
 Remove `odo` component
 +
-------------------------------------------
+--------------------------------------
 odo delete --force user-group-operator
-------------------------------------------
+--------------------------------------
 +
 Delete resources created from helm template:
 +
