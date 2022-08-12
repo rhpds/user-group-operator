@@ -392,9 +392,9 @@ class UserGroupConfig:
                 if not _continue:
                     break
             except kubernetes.client.rest.ApiException as e:
-                logger.info("Resetting user list for group management")
-                if e.status == 409:
+                if e.status == 410:
                     # Query expired before completion, reset.
+                    logger.info("Restarting user list for group management")
                     _continue = None
                 else:
                     raise
