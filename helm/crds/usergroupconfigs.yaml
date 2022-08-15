@@ -108,6 +108,12 @@ spec:
                                   description: >-
                                     OpenShift group name to associate to the user entry.
                                   type: string
+                                groups:
+                                  description: >-
+                                    OpenShift group names to associate to the user entry.
+                                  type: array
+                                  items:
+                                    type: string
                                 value:
                                   description: >-
                                     Specific value to match for this attribute.
@@ -237,6 +243,12 @@ spec:
                                   description: >-
                                     OpenShift group name to associate to the user entry.
                                   type: string
+                                groups:
+                                  description: >-
+                                    OpenShift group names to associate to the user entry.
+                                  type: array
+                                  items:
+                                    type: string
                                 value:
                                   description: >-
                                     Specific value to match for this attribute.

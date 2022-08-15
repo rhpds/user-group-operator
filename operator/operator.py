@@ -383,7 +383,6 @@ class UserGroupConfig:
                 for user_definition in user_list.get('items', []):
                     user = User(user_definition)
                     if last_processed_user_name and last_processed_user_name >= user.name:
-                        logger.info(f"Skipping {user.name}")
                         continue
                     else:
                         last_processed_user_name = user.name
@@ -484,7 +483,7 @@ class UserGroupConfigLDAP:
                     if attribute_to_group.value_to_group:
                         for value_to_group in attribute_to_group.value_to_group:
                             if value == value_to_group.value:
-                                group_names.add(value_to_group.group or default_group_name)
+                                group_names.update(value_to_group.get_groups(default_group_name))
                     else:
                         group_names.add(default_group_name)
             except ldap3.core.exceptions.LDAPKeyError:
@@ -529,7 +528,14 @@ class UserGroupConfigLDAPAttributeToGroup:
 class UserGroupConfigLDAPAttributeValueToGroup:
     def __init__(self, definition):
         self.group = definition.get('group')
+        self.groups = definition.get('groups')
         self.value = definition['value']
+
+    def get_groups(self, default_group_name):
+        if self.group == None and self.groups == None:
+            return default_group_name
+        else:
+            return (self.groups or []) + ([self.group] if self.group else [])
 
 
 class UserGroupConfigLDAPAuthSecret:
@@ -622,7 +628,7 @@ class UserGroupConfigSalesforce:
             if field_to_group.value_to_group:
                 for value_to_group in field_to_group.value_to_group:
                     if value == value_to_group.value:
-                        group_names.add(value_to_group.group or default_group_name)
+                        group_names.update(value_to_group.get_groups(default_group_name))
             else:
                 group_names.add(default_group_name)
 
@@ -704,7 +710,14 @@ class UserGroupConfigSalesforceFieldToGroup:
 class UserGroupConfigSalesforceFieldValueToGroup:
     def __init__(self, definition):
         self.group = definition.get('group')
+        self.groups = definition.get('groups')
         self.value = definition['value']
+
+    def get_groups(self, default_group_name):
+        if self.group == None and self.groups == None:
+            return default_group_name
+        else:
+            return (self.groups or []) + ([self.group] if self.group else [])
 
 
 class UserGroupMember:

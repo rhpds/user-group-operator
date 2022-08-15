@@ -258,3 +258,85 @@
     r_verify_user_group_member.resources | length != 0
   retries: 10
   delay: 2
+
+- name: Update test-ldap UserGroupConfig
+  kubernetes.core.k8s:
+    definition:
+      apiVersion: usergroup.pfe.redhat.com/v1
+      kind: UserGroupConfig
+      metadata:
+        name: test-ldap
+      spec:
+        ldap:
+        - attributeToGroup:
+          - attribute: memberOf
+            valueToGroup:
+            - group: test-ldap-admins
+              value: cn=Admin,ou=Groups,dc=example,dc=com
+            - groups:
+              - test-ldap-dev
+              - test-ldap-developers
+              value: cn=Dev,ou=Groups,dc=example,dc=com
+          authSecret:
+            name: test-ldap-auth
+            namespace: "{{ test_namespace }}"
+          identityProviderName: user-group-operator-test
+          insecure: true
+          url: ldap://test-ldap-server
+          userBaseDN: ou=Users,dc=example,dc=com
+          userSearchAttribute: mail
+          userSearchValue: email
+          userObjectClass: inetOrgPerson
+        refresh_interval: 10
+
+- name: Verify Group test-ldap-admins has user test-ldap-alice and test-ldap-bob
+  kubernetes.core.k8s_info:
+    api_version: user.openshift.io/v1
+    kind: Group
+    name: test-ldap-admins
+  register: r_verify_group
+  failed_when: >-
+    r_verify_group.resources | length != 1 or
+    r_verify_group.resources[0].users != ['test-ldap-alice', 'test-ldap-bob']
+  until: r_verify_group is success
+  retries: 10
+  delay: 1
+
+- name: Verify Group test-ldap-admin is now empty
+  kubernetes.core.k8s_info:
+    api_version: user.openshift.io/v1
+    kind: Group
+    name: test-ldap-admin
+  register: r_verify_group
+  failed_when: >-
+    r_verify_group.resources | length != 1 or
+    r_verify_group.resources[0].users != []
+  until: r_verify_group is success
+  retries: 10
+  delay: 1
+
+- name: Verify Group test-ldap-dev has user test-ldap-bob and test-ldap-carole
+  kubernetes.core.k8s_info:
+    api_version: user.openshift.io/v1
+    kind: Group
+    name: test-ldap-dev
+  register: r_verify_group
+  failed_when: >-
+    r_verify_group.resources | length != 1 or
+    r_verify_group.resources[0].users != ['test-ldap-bob', 'test-ldap-carole']
+  until: r_verify_group is success
+  retries: 10
+  delay: 1
+
+- name: Verify Group test-ldap-developers has user test-ldap-bob and test-ldap-carole
+  kubernetes.core.k8s_info:
+    api_version: user.openshift.io/v1
+    kind: Group
+    name: test-ldap-developers
+  register: r_verify_group
+  failed_when: >-
+    r_verify_group.resources | length != 1 or
+    r_verify_group.resources[0].users != ['test-ldap-bob', 'test-ldap-carole']
+  until: r_verify_group is success
+  retries: 10
+  delay: 1
