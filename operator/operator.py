@@ -301,7 +301,7 @@ class UserGroupConfig:
 
     @property
     def refresh_interval(self):
-        return int(self.spec.get('refresh_interval', 3600))
+        return int(self.spec.get('refresh_interval', 3 * 60 * 60))
 
     def cleanup_on_delete(self, logger):
         _continue = None
