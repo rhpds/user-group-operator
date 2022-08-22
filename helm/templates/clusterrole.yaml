@@ -22,6 +22,14 @@ rules:
   - update
   - watch
 - apiGroups:
+  - oauth.openshift.io
+  resources:
+  - oauthaccesstokens
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - user.openshift.io
   resources:
   - identities
