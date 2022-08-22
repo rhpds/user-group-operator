@@ -13,6 +13,7 @@ import threading
 import time
 
 from base64 import b64decode
+from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 
 from configure_kopf_logging import configure_kopf_logging
@@ -20,6 +21,7 @@ from infinite_relative_backoff import InfiniteRelativeBackoff
 
 operator_domain = os.environ.get('OPERATOR_DOMAIN', 'usergroup.pfe.redhat.com')
 operator_version = os.environ.get('OPERATOR_VERSION', 'v1')
+operator_start_datetime = datetime.now(timezone.utc)
 
 if os.path.exists('/run/secrets/kubernetes.io/serviceaccount/token'):
     kubernetes.config.load_incluster_config()
@@ -200,9 +202,24 @@ class Identity:
 
 
 class User:
-    def __init__(self, definition, logger=None):
+    @staticmethod
+    def get(name):
+        definition = custom_objects_api.get_cluster_custom_object(
+            'user.openshift.io', 'v1', 'users', name
+        )
+        return User(definition)
+
+    def __init__(self, definition):
         self.identities = definition.get('identities')
         self.metadata = definition['metadata']
+
+    @property
+    def creation_datetime(self):
+        return datetime.strptime(self.creation_timestamp, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo = timezone.utc)
+
+    @property
+    def creation_timestamp(self):
+        return self.metadata['creationTimestamp']
 
     @property
     def name(self):
@@ -284,7 +301,7 @@ class UserGroupConfig:
 
     @property
     def refresh_interval(self):
-        return int(self.spec.get('refresh_interval', 3600))
+        return int(self.spec.get('refresh_interval', 3 * 60 * 60))
 
     def cleanup_on_delete(self, logger):
         _continue = None
@@ -368,7 +385,7 @@ class UserGroupConfig:
 
     def manage_groups(self, logger):
         with self._lock:
-            self._manage_groups(logger)
+            self._manage_groups(logger=logger)
 
     def _manage_groups(self, logger):
         _continue = None
@@ -810,8 +827,21 @@ def configure(settings: kopf.OperatorSettings, **_):
 @kopf.on.event('user.openshift.io', 'v1', 'users')
 def user_handler(event, logger, **_):
     if event['type'] in ['ADDED', 'MODIFIED', None]:
-        user = User(event['object'], logger)
-        user.manage_groups(logger)
+        user = User(event['object'])
+        user.manage_groups(logger=logger)
+
+
+@kopf.on.event('oauth.openshift.io', 'v1', 'oauthaccesstokens')
+def oauthaccesstoken_handler(event, logger, **_):
+    # Do not begin updating from oauthaccesstokens initially.
+    # User updates will already be proccessed by the user handler.
+    if datetime.now(timezone.utc) - operator_start_datetime < timedelta(minutes=5):
+        return
+    # Only manage groups for user when OAuthAccessTokens is added and user is not recently created.
+    if event['type'] != 'ADDED':
+        user = User.get(event['object']['userName'])
+        if datetime.now(timezone.utc) - user.creation_datetime > timedelta(minutes=1):
+            user.manage_groups(logger=logger)
 
 
 @kopf.on.create('usergroup.pfe.redhat.com', 'v1', 'usergroupconfigs', id='usergroupconfig_create')
@@ -819,7 +849,7 @@ def user_handler(event, logger, **_):
 @kopf.on.update('usergroup.pfe.redhat.com', 'v1', 'usergroupconfigs', id='usergroupconfig_update')
 def usergroupconfig_event(name, spec, logger, **_):
     config = UserGroupConfig.register(name=name, spec=spec)
-    config.manage_groups(logger)
+    config.manage_groups(logger=logger)
 
 @kopf.daemon('usergroup.pfe.redhat.com', 'v1', 'usergroupconfigs', cancellation_timeout=1)
 async def usergroupconfig_daemon(stopped, name, spec, logger, **_):
@@ -830,7 +860,7 @@ async def usergroupconfig_daemon(stopped, name, spec, logger, **_):
             if stopped:
                 break
             else:
-                config.manage_groups(logger)
+                config.manage_groups(logger=logger)
     except asyncio.CancelledError:
         pass
 
