@@ -1,7 +1,7 @@
 import asyncio
 import copy
 import kopf
-import kubernetes
+import kubernetes_asyncio
 import ldap3
 import logging
 import os
@@ -9,8 +9,6 @@ import re
 import simple_salesforce
 import ssl
 import tempfile
-import threading
-import time
 
 from base64 import b64decode
 from datetime import datetime, timedelta, timezone
@@ -23,25 +21,18 @@ operator_domain = os.environ.get('OPERATOR_DOMAIN', 'usergroup.pfe.redhat.com')
 operator_version = os.environ.get('OPERATOR_VERSION', 'v1')
 operator_start_datetime = datetime.now(timezone.utc)
 
-if os.path.exists('/run/secrets/kubernetes.io/serviceaccount/token'):
-    kubernetes.config.load_incluster_config()
-else:
-    kubernetes.config.load_kube_config()
-
-core_v1_api = kubernetes.client.CoreV1Api()
-custom_objects_api = kubernetes.client.CustomObjectsApi()
-
+core_v1_api = custom_objects_api = operator_namespace = None
 
 class Group:
     @staticmethod
-    def add_user(group_name, user_name, logger):
+    async def add_user(group_name, user_name, logger):
         try:
-            group = Group.get(group_name)
+            group = await Group.get(group_name)
             if group:
                 if user_name in group.users:
                     return group
                 else:
-                    definition = custom_objects_api.replace_cluster_custom_object(
+                    definition = await custom_objects_api.replace_cluster_custom_object(
                         'user.openshift.io', 'v1', 'groups', group_name,
                         {
                             "apiVersion": "user.openshift.io/v1",
@@ -53,7 +44,7 @@ class Group:
                     logger.info(f"Addded {user_name} to group {group_name}")
                     return Group(definition)
             else:
-                definition = custom_objects_api.create_cluster_custom_object(
+                definition = await custom_objects_api.create_cluster_custom_object(
                     'user.openshift.io', 'v1', 'groups',
                     {
                         "apiVersion": "user.openshift.io/v1",
@@ -66,60 +57,35 @@ class Group:
                 )
                 logger.info(f"Created group {group_name} with first user {user_name}")
                 return Group(definition)
-        except kubernetes.client.rest.ApiException as e:
+        except kubernetes_asyncio.client.exceptions.ApiException as e:
             if e.status == 409:
                 raise kopf.TemporaryError(f"Conflict while adding {user_name} to {group_name}", delay=1)
             else:
                 raise
 
     @staticmethod
-    def get(group_name):
+    async def get(group_name):
         try:
-            definition = custom_objects_api.get_cluster_custom_object(
+            definition = await custom_objects_api.get_cluster_custom_object(
                 'user.openshift.io', 'v1', 'groups', group_name
             )
             return Group(definition)
-        except kubernetes.client.rest.ApiException as e:
+        except kubernetes_asyncio.client.exceptions.ApiException as e:
             if e.status != 404:
                 raise
 
     @staticmethod
-    def get_or_create(group_name):
-        try:
-            group = Group.get(group_name)
-            if not group:
-                group = Group(
-                    custom_objects_api.create_cluster_custom_object(
-                        'user.openshift.io', 'v1', 'groups',
-                        {
-                            "apiVersion": "user.openshift.io/v1",
-                            "kind": "Group",
-                            "metadata": {
-                                "name": group_name,
-                            },
-                            "users": [],
-                        }
-                    )
-                )
-            return group
-        except kubernetes.client.rest.ApiException as e:
-            if e.status == 409:
-                raise kopf.TemporaryError(f"Conflict while creating group {group_name}", delay=1)
-            else:
-                raise
-
-    @staticmethod
-    def remove_user(group_name, user_name, logger):
+    async def remove_user(group_name, user_name, logger):
         attempt = 0
         while True:
             attempt += 1
             try:
-                group = Group.get(group_name)
+                group = await Group.get(group_name)
                 if not group:
                     return
                 if user_name not in group.users:
                     return
-                custom_objects_api.replace_cluster_custom_object(
+                await custom_objects_api.replace_cluster_custom_object(
                     'user.openshift.io', 'v1', 'groups', group_name,
                     {
                         "apiVersion": "user.openshift.io/v1",
@@ -130,7 +96,7 @@ class Group:
                 )
                 logger.info(f"Removed {user_name} from group {group_name}")
                 return
-            except kubernetes.client.rest.ApiException as e:
+            except kubernetes_asyncio.client.exceptions.ApiException as e:
                 if attempt > 3:
                     raise
 
@@ -158,16 +124,17 @@ class Group:
 
 class Identity:
     @staticmethod
-    def get(name, retries=0, retry_delay=1):
+    async def get(name, logger=None, retries=0, retry_delay=1):
         while True:
             try:
-                definition = custom_objects_api.get_cluster_custom_object(
+                definition = await custom_objects_api.get_cluster_custom_object(
                     'user.openshift.io', 'v1', 'identities', name
                 )
                 return Identity(definition)
-            except kubernetes.client.rest.ApiException as e:
+            except kubernetes_asyncio.client.exceptions.ApiException as e:
                 if retries > 0:
-                    time.sleep(retry_delay)
+                    logger.info(f"Retrying get identity {name}")
+                    await asyncio.sleep(retry_delay)
                     retries -= 1;
                 else:
                     raise
@@ -203,8 +170,8 @@ class Identity:
 
 class User:
     @staticmethod
-    def get(name):
-        definition = custom_objects_api.get_cluster_custom_object(
+    async def get(name):
+        definition = await custom_objects_api.get_cluster_custom_object(
             'user.openshift.io', 'v1', 'users', name
         )
         return User(definition)
@@ -215,7 +182,9 @@ class User:
 
     @property
     def creation_datetime(self):
-        return datetime.strptime(self.creation_timestamp, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo = timezone.utc)
+        return datetime.strptime(
+            self.creation_timestamp, '%Y-%m-%dT%H:%M:%SZ'
+        ).replace(tzinfo = timezone.utc)
 
     @property
     def creation_timestamp(self):
@@ -238,17 +207,17 @@ class User:
     def uid(self):
         return self.metadata['uid']
 
-    def get_identities(self, logger, retries=0, retry_delay=1):
+    async def get_identities(self, logger, retries=0, retry_delay=1):
         if not self.identities:
             return []
         identities = []
         for identity_name in self.identities:
-            identities.append(Identity.get(identity_name, retries=3, retry_delay=0.5))
+            identities.append(await Identity.get(identity_name, retries=3, retry_delay=0.5, logger=logger))
         return identities
 
-    def manage_groups(self, logger):
+    async def manage_groups(self, logger):
         for config in UserGroupConfig.list():
-            config.manage_user_group_members(self, logger)
+            await config.manage_user_group_members(self, logger)
 
 
 class UserGroupConfig:
@@ -263,8 +232,21 @@ class UserGroupConfig:
         return UserGroupConfig.__configs.values()
 
     @staticmethod
+    async def preload():
+        # Preload all UserGroupConfig definitions
+        user_group_configs_list = await custom_objects_api.list_cluster_custom_object(
+            operator_domain, operator_version, 'usergroupconfigs'
+        )
+
+        for definition in user_group_configs_list.get('items', []):
+            UserGroupConfig.register(
+                name = definition['metadata']['name'],
+                spec = definition['spec'],
+            )
+
+    @staticmethod
     def register(name, **kwargs):
-        config = UserGroupConfig.__configs.get(name)
+        config = UserGroupConfig.get(name)
         if config:
             config.__init__(name=name, **kwargs)
         else:
@@ -281,7 +263,7 @@ class UserGroupConfig:
         self.salesforce = [
             UserGroupConfigSalesforce(item) for item in spec['salesforce']
         ] if 'salesforce' in self.spec else []
-        self._lock = threading.Lock()
+        self._lock = asyncio.Lock()
 
     @property
     def email_domain_groups_enabled(self):
@@ -303,11 +285,11 @@ class UserGroupConfig:
     def refresh_interval(self):
         return int(self.spec.get('refresh_interval', 3 * 60 * 60))
 
-    def cleanup_on_delete(self, logger):
+    async def cleanup_on_delete(self, logger):
         _continue = None
         user_group_member_names = []
         while True:
-            user_group_member_list = custom_objects_api.list_cluster_custom_object(
+            user_group_member_list = await custom_objects_api.list_cluster_custom_object(
                 operator_domain, operator_version, 'usergroupmembers',
                 _continue = _continue,
                 label_selector = f"usergroup.pfe.redhat.com/config={self.name}",
@@ -322,15 +304,15 @@ class UserGroupConfig:
 
         for user_group_member_name in user_group_member_names:
             logger.info(f"Cleanup UserGroupMember {user_group_member_name} on UserGroupConfig deletion")
-            user_group_member_list = custom_objects_api.delete_cluster_custom_object(
+            user_group_member_list = await custom_objects_api.delete_cluster_custom_object(
                 operator_domain, operator_version, 'usergroupmembers', user_group_member_name
             )
 
-    def manage_user_group_members(self, user, logger):
+    async def manage_user_group_members(self, user, logger):
         logger.info(f"Managing user {user.name}")
         group_names = set()
 
-        for identity in user.get_identities(logger=logger):
+        for identity in await user.get_identities(logger=logger):
             identity_group_names = set()
 
             if self.identity_provider_groups_enabled:
@@ -350,18 +332,18 @@ class UserGroupConfig:
                 if not ldap.identity_provider_name \
                 or ldap.identity_provider_name == identity.provider_name:
                     identity_group_names.update(
-                        ldap.get_group_names(user, identity, logger)
+                        await ldap.get_group_names(user, identity, logger)
                     )
 
             for salesforce in self.salesforce:
                 if not salesforce.identity_provider_name \
                 or salesforce.identity_provider_name == identity.provider_name:
                     identity_group_names.update(
-                        salesforce.get_group_names(user, identity, logger)
+                        await salesforce.get_group_names(user, identity, logger)
                     )
 
             for group_name in identity_group_names:
-                UserGroupMember.create(
+                await UserGroupMember.create(
                     config = self,
                     group_name = group_name,
                     identity = identity,
@@ -371,28 +353,30 @@ class UserGroupConfig:
 
             group_names.update(identity_group_names)
 
-        for user_group_member_definition in custom_objects_api.list_cluster_custom_object(
+        user_group_member_list = await custom_objects_api.list_cluster_custom_object(
             operator_domain, operator_version, 'usergroupmembers',
             label_selector = f"usergroup.pfe.redhat.com/config={self.name},usergroup.pfe.redhat.com/user-uid={user.uid}",
-        ).get('items', []):
+        )
+        for user_group_member_definition in user_group_member_list.get('items', []):
             name = user_group_member_definition['metadata']['name']
             group_name = user_group_member_definition['spec']['group']['name']
             if group_name not in group_names:
                 logger.info(f"Cleanup UserGroupMember {name}")
-                user_group_member_list = custom_objects_api.delete_cluster_custom_object(
+                await custom_objects_api.delete_cluster_custom_object(
                     operator_domain, operator_version, 'usergroupmembers', name
                 )
 
-    def manage_groups(self, logger):
-        with self._lock:
-            self._manage_groups(logger=logger)
+    async def manage_groups(self, logger):
+        async with self._lock:
+            await self._manage_groups(logger=logger)
 
-    def _manage_groups(self, logger):
+
+    async def _manage_groups(self, logger):
         _continue = None
         last_processed_user_name = None
         while True:
             try:
-                user_list = custom_objects_api.list_cluster_custom_object(
+                user_list = await custom_objects_api.list_cluster_custom_object(
                     'user.openshift.io', 'v1', 'users',
                     _continue = _continue,
                     limit = 50,
@@ -403,11 +387,11 @@ class UserGroupConfig:
                         continue
                     else:
                         last_processed_user_name = user.name
-                    self.manage_user_group_members(user, logger)
+                    await self.manage_user_group_members(user, logger)
                 _continue = user_list['metadata'].get('continue')
                 if not _continue:
                     break
-            except kubernetes.client.rest.ApiException as e:
+            except kubernetes_asyncio.client.exceptions.ApiException as e:
                 if e.status == 410:
                     # Query expired before completion, reset.
                     logger.info("Restarting user list for group management")
@@ -437,14 +421,6 @@ class UserGroupConfigLDAP:
         self.user_search_value = definition.get('userSearchValue', 'name')
 
     @property
-    def bind_dn(self):
-        return self.auth_secret.bind_dn
-
-    @property
-    def bind_password(self):
-        return self.auth_secret.bind_password
-
-    @property
     def ca_cert_file(self):
         if not self.ca_cert:
             return None
@@ -454,7 +430,23 @@ class UserGroupConfigLDAP:
                 f.write(self.ca_cert)
         return file_path
 
-    def get_group_names(self, user, identity, logger):
+    async def get_bind_dn(self):
+        return await self.auth_secret.get_bind_dn()
+
+    async def get_bind_password(self):
+        return await self.auth_secret.get_bind_password()
+
+    async def get_group_names(self, user, identity, logger):
+        bind_dn = await self.get_bind_dn()
+        bind_password = await self.get_bind_password()
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None, self.__noasync_get_group_names,
+            user, identity, logger, bind_dn, bind_password
+        )
+
+    def __noasync_get_group_names(self, user, identity, logger, bind_dn, bind_password):
+        # ldap3 does not support asyncio
         group_names = set()
 
         # If restricted to an identity provider then check match
@@ -466,7 +458,7 @@ class UserGroupConfigLDAP:
         if not search_value:
             return group_names
 
-        connection = self.ldap_connect()
+        connection = self.__noasync_ldap_connect(bind_dn, bind_password)
 
         user_object_def = ldap3.ObjectDef(self.user_object_class, connection)
         if not hasattr(user_object_def, self.user_search_attribute):
@@ -508,7 +500,7 @@ class UserGroupConfigLDAP:
 
         return group_names
 
-    def ldap_connect(self):
+    def __noasync_ldap_connect(self, bind_dn, bind_password):
         protocol, server, port = self.ldapUrlRegex.match(self.url).groups()
         if port:
             port = int(port)
@@ -525,7 +517,7 @@ class UserGroupConfigLDAP:
             use_ssl = protocol == 'ldaps',
         )
 
-        connection = ldap3.Connection(server, self.bind_dn, self.bind_password)
+        connection = ldap3.Connection(server, bind_dn, bind_password)
 
         if protocol == 'ldap' and not self.insecure:
             connection.start_tls()
@@ -560,53 +552,42 @@ class UserGroupConfigLDAPAuthSecret:
         self.name = definition['name']
         self._bind_dn = None
         self._bind_password = None
-        self._lock = threading.Lock()
-        if 'namespace' in definition:
-            self.namespace = definition['namespace']
-        else:
-            try:
-                # Try getting namespace within cluster
-                with open('/run/secrets/kubernetes.io/serviceaccount/namespace') as f:
-                    self.namespace = f.read()
-            except FileNotfoundError:
-                # Running locally?
-                self.namespace = kubernetes.config.list_kube_config_contexts()[1]['context']['namespace']
+        self._lock = asyncio.Lock()
+        self.namespace = definition.get('namespace', operator_namespace)
 
-    @property
-    def bind_dn(self):
-        if self._bind_dn:
-            return self._bind_dn
-        with self._lock:
-            if not self._bind_dn:
-                self._read_secret()
-        return self._bind_dn
-
-    @property
-    def bind_password(self):
-        if self._bind_password:
-            return self._bind_password
-        with self._lock:
-            if not self._bind_password:
-                self._read_secret()
-            return self._bind_password
-
-    def _read_secret(self):
+    async def _read_secret(self):
         '''
         Attempt to read LDAP secret with retries in case the configuration was created befor the secret.
         '''
         attempt = 0
         while True:
             try:
-                secret = core_v1_api.read_namespaced_secret(self.name, self.namespace)
+                secret = await core_v1_api.read_namespaced_secret(self.name, self.namespace)
                 self._bind_dn = b64decode(secret.data['bindDN']).decode('utf-8')
                 self._bind_password = b64decode(secret.data['bindPassword']).decode('utf-8')
                 return
-            except kubernetes.client.rest.ApiException as e:
+            except kubernetes_asyncio.client.exceptions.ApiException as e:
                 if e.status == 404 and attempt < 10:
                     attempt += 1
-                    time.sleep(0.5)
+                    await asyncio.sleep(0.5)
                 else:
                     raise
+
+    async def get_bind_dn(self):
+        if self._bind_dn:
+            return self._bind_dn
+        async with self._lock:
+            if not self._bind_dn:
+                await self._read_secret()
+        return self._bind_dn
+
+    async def get_bind_password(self):
+        if self._bind_password:
+            return self._bind_password
+        async with self._lock:
+            if not self._bind_password:
+                await self._read_secret()
+            return self._bind_password
 
 
 class UserGroupConfigSalesforce:
@@ -622,7 +603,18 @@ class UserGroupConfigSalesforce:
         self.user_search_value = definition.get('userSearchValue', 'name')
         self.username = definition['username']
 
-    def get_group_names(self, user, identity, logger):
+
+    async def get_group_names(self, user, identity, logger):
+        salesforce_api = await self.salesforce_api()
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None, self.__noasync_get_group_names,
+            user, identity, logger, salesforce_api
+        )
+
+
+    def __noasync_get_group_names(self, user, identity, logger, salesforce_api):
+        # simple_salesforce does not support asyncio
         group_names = set()
 
         # If restricted to an identity provider then check match
@@ -634,7 +626,6 @@ class UserGroupConfigSalesforce:
         if not search_value:
             return group_names
 
-        salesforce_api = self.salesforce_api()
         salesforce_user = salesforce_api.apexecute(f"vendor/user/lookup?{self.user_search_field}={search_value}", method='GET')
 
         for field_to_group in self.field_to_group:
@@ -651,12 +642,12 @@ class UserGroupConfigSalesforce:
 
         return group_names
 
-    def salesforce_api(self):
+    async def salesforce_api(self):
         return simple_salesforce.Salesforce(
             instance_url = self.url,
             username = self.username,
             consumer_key = self.consumer_key,
-            privatekey_file = self.consumer_secret.file_path,
+            privatekey_file = await self.consumer_secret.get_file_path(),
         )
 
 
@@ -664,39 +655,29 @@ class UserGroupConfigSalesforceConsumerSecret:
     def __init__(self, definition):
         self.name = definition['name']
         self._tempfile = None
-        self._lock = threading.Lock()
-        if 'namespace' in definition:
-            self.namespace = definition['namespace']
-        else:
-            try:
-                # Try getting namespace within cluster
-                with open('/run/secrets/kubernetes.io/serviceaccount/namespace') as f:
-                    self.namespace = f.read()
-            except FileNotfoundError:
-                # Running locally?
-                self.namespace = kubernetes.config.list_kube_config_contexts()[1]['context']['namespace']
+        self._lock = asyncio.Lock()
+        self.namespace = definition.get('namespace', operator_namespace)
 
     def __del__(self):
         if self._tempfile:
             os.unlink(self._tempfile.name)
 
-    @property
-    def file_path(self):
+    async def get_file_path(self):
         if self._tempfile:
             return self._tempfile.name
-        with self._lock:
+        async with self._lock:
             if not self._tempfile:
-                self._read_secret_to_tempfile()
+                await self._read_secret_to_tempfile()
         return self._tempfile.name
 
-    def _read_secret_to_tempfile(self):
+    async def _read_secret_to_tempfile(self):
         '''
         Attempt to read Salesforce client secret with retries in case the configuration was created befor the secret.
         '''
         attempt = 0
         while True:
             try:
-                secret = core_v1_api.read_namespaced_secret(self.name, self.namespace)
+                secret = await core_v1_api.read_namespaced_secret(self.name, self.namespace)
                 secret_keys = secret.data.keys()
                 if secret_keys == 1:
                     client_secret_key = secret_keys[1]
@@ -708,10 +689,10 @@ class UserGroupConfigSalesforceConsumerSecret:
                 self._tempfile.write(b64decode(secret.data[client_secret_key]))
                 self._tempfile.close()
                 return
-            except kubernetes.client.rest.ApiException as e:
+            except kubernetes_asyncio.client.exceptions.ApiException as e:
                 if e.status == 404 and attempt < 10:
                     attempt += 1
-                    time.sleep(0.5)
+                    await asyncio.sleep(0.5)
                 else:
                     raise
 
@@ -739,8 +720,8 @@ class UserGroupConfigSalesforceFieldValueToGroup:
 
 class UserGroupMember:
     @staticmethod
-    def create(config, group_name, identity, logger, user):
-        group = Group.get(group_name)
+    async def create(config, group_name, identity, logger, user):
+        group = await Group.get(group_name)
         name = f"{group_name.lower()}.{user.uid}"
         try:
             definition = {
@@ -776,9 +757,9 @@ class UserGroupMember:
             }
             if group:
                 definition['metadata']['labels']['usergroup.pfe.redhat.com/group-uid'] = group.uid
-            custom_objects_api.create_cluster_custom_object('usergroup.pfe.redhat.com', 'v1', 'usergroupmembers', definition)
+            await custom_objects_api.create_cluster_custom_object('usergroup.pfe.redhat.com', 'v1', 'usergroupmembers', definition)
             logger.info(f"Created UserGroupMember {name}")
-        except kubernetes.client.rest.ApiException as e:
+        except kubernetes_asyncio.client.exceptions.ApiException as e:
             if e.status != 409:
                 raise
 
@@ -792,7 +773,9 @@ class UserGroupMember:
 
 
 @kopf.on.startup()
-def configure(settings: kopf.OperatorSettings, **_):
+async def configure(settings: kopf.OperatorSettings, **_):
+    global core_v1_api, custom_objects_api, operator_namespace
+
     # Store last handled configuration in status
     settings.persistence.diffbase_storage = kopf.StatusDiffBaseStorage(field='status.diffBase')
 
@@ -814,42 +797,46 @@ def configure(settings: kopf.OperatorSettings, **_):
     # Configure logging
     configure_kopf_logging()
 
-    # Preload all UserGroupConfig definitions
-    for definition in custom_objects_api.list_cluster_custom_object(
-        operator_domain, operator_version, 'usergroupconfigs'
-    ).get('items'):
-        UserGroupConfig.register(
-            name = definition['metadata']['name'],
-            spec = definition['spec'],
-        )
+    if os.path.exists('/run/secrets/kubernetes.io/serviceaccount/token'):
+        kubernetes_asyncio.config.load_incluster_config()
+        with open('/run/secrets/kubernetes.io/serviceaccount/namespace') as f:
+            operator_namespace = f.read()
+    else:
+        await kubernetes_asyncio.config.load_kube_config()
+        operator_namespace = kubernetes_asyncio.config.list_kube_config_contexts()[1]['context']['namespace']
+
+    core_v1_api = kubernetes_asyncio.client.CoreV1Api()
+    custom_objects_api = kubernetes_asyncio.client.CustomObjectsApi()
+
+    await UserGroupConfig.preload()
 
 
 @kopf.on.event('user.openshift.io', 'v1', 'users')
-def user_handler(event, logger, **_):
+async def user_handler(event, logger, **_):
     if event['type'] in ['ADDED', 'MODIFIED', None]:
         user = User(event['object'])
-        user.manage_groups(logger=logger)
+        await user.manage_groups(logger=logger)
 
 
 @kopf.on.event('oauth.openshift.io', 'v1', 'oauthaccesstokens')
-def oauthaccesstoken_handler(event, logger, **_):
+async def oauthaccesstoken_handler(event, logger, **_):
     # Do not begin updating from oauthaccesstokens initially.
     # User updates will already be proccessed by the user handler.
     if datetime.now(timezone.utc) - operator_start_datetime < timedelta(minutes=5):
         return
     # Only manage groups for user when OAuthAccessTokens is added and user is not recently created.
     if event['type'] != 'ADDED':
-        user = User.get(event['object']['userName'])
+        user = await User.get(event['object']['userName'])
         if datetime.now(timezone.utc) - user.creation_datetime > timedelta(minutes=1):
-            user.manage_groups(logger=logger)
+            await user.manage_groups(logger=logger)
 
 
 @kopf.on.create('usergroup.pfe.redhat.com', 'v1', 'usergroupconfigs', id='usergroupconfig_create')
 @kopf.on.resume('usergroup.pfe.redhat.com', 'v1', 'usergroupconfigs', id='usergroupconfig_resume')
 @kopf.on.update('usergroup.pfe.redhat.com', 'v1', 'usergroupconfigs', id='usergroupconfig_update')
-def usergroupconfig_event(name, spec, logger, **_):
+async def usergroupconfig_event(name, spec, logger, **_):
     config = UserGroupConfig.register(name=name, spec=spec)
-    config.manage_groups(logger=logger)
+    await config.manage_groups(logger=logger)
 
 @kopf.daemon('usergroup.pfe.redhat.com', 'v1', 'usergroupconfigs', cancellation_timeout=1)
 async def usergroupconfig_daemon(stopped, name, spec, logger, **_):
@@ -860,28 +847,28 @@ async def usergroupconfig_daemon(stopped, name, spec, logger, **_):
             if stopped:
                 break
             else:
-                config.manage_groups(logger=logger)
+                await config.manage_groups(logger=logger)
     except asyncio.CancelledError:
         pass
 
 @kopf.on.delete('usergroup.pfe.redhat.com', 'v1', 'usergroupconfigs')
-def usergroupmember_delete(name, spec, logger, **_):
+async def usergroupmember_delete(name, spec, logger, **_):
     config = UserGroupConfig(name=name, spec=spec)
-    config.cleanup_on_delete(logger)
+    await config.cleanup_on_delete(logger)
     config.unregister()
 
 
 @kopf.on.create('usergroup.pfe.redhat.com', 'v1', 'usergroupmembers', id='usergroupmember_create')
 @kopf.on.resume('usergroup.pfe.redhat.com', 'v1', 'usergroupmembers', id='usergroupmember_resume')
 @kopf.on.update('usergroup.pfe.redhat.com', 'v1', 'usergroupmembers', id='usergroupmember_update')
-def usergroupmember_event(name, labels, meta, spec, logger, **_):
-    group = Group.add_user(
+async def usergroupmember_event(name, labels, meta, spec, logger, **_):
+    group = await Group.add_user(
         spec['group']['name'],
         spec['user']['name'],
         logger,
     )
     if 'uid' not in spec['group'] or 'usergroup.pfe.redhat.com/group-uid' not in labels:
-        custom_objects_api.patch_cluster_custom_object(
+        await custom_objects_api.patch_cluster_custom_object(
             operator_domain, operator_version, "usergroupmembers", name,
             {
                 "metadata": {
@@ -892,12 +879,13 @@ def usergroupmember_event(name, labels, meta, spec, logger, **_):
                 "spec": {
                     "group": group.ref,
                 }
-            }
+            },
+            _content_type="application/merge-patch+json"
         )
 
 @kopf.on.delete('usergroup.pfe.redhat.com', 'v1', 'usergroupmembers')
-def usergroupmember_delete(spec, logger, **_):
-    Group.remove_user(
+async def usergroupmember_delete(spec, logger, **_):
+    await Group.remove_user(
         spec['group']['name'],
         spec['user']['name'],
         logger,
