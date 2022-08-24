@@ -34,10 +34,11 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           livenessProbe:
+            failureThreshold: 5
             initialDelaySeconds: 30
             tcpSocket:
               port: 8080
-            timeoutSeconds: 5
+            timeoutSeconds: 10
           ports:
           - name: metrics
             containerPort: 8000
