@@ -106,3 +106,4 @@ data:
     cn: Dev
     uniqueMember: uid=bob,ou=Users,dc=example,dc=com
     uniqueMember: uid=carole,ou=Users,dc=example,dc=com
+    uniqueMember: uid=dorthy,ou=Users,dc=example,dc=com

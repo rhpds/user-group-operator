@@ -340,3 +340,69 @@
   until: r_verify_group is success
   retries: 10
   delay: 1
+
+- name: Shutdown LDAP server
+  kubernetes.core.k8s_scale:
+    api_version: apps/v1
+    kind: Deployment
+    name: test-ldap-server
+    namespace: "{{ test_namespace }}"
+    replicas: 0
+
+- name: Create User test-ldap-dorthy
+  kubernetes.core.k8s:
+    definition:
+      apiVersion: user.openshift.io/v1
+      kind: User
+      metadata:
+        name: test-ldap-dorthy
+      identities:
+      - user-group-operator-test:test-ldap-dorthy
+  register: r_create_user_dorthy
+
+- name: Create Identity user-group-operator-test:test-ldap-dorthy
+  kubernetes.core.k8s:
+    definition:
+      apiVersion: user.openshift.io/v1
+      kind: Identity
+      metadata:
+        name: user-group-operator-test:test-ldap-dorthy
+      extra:
+        email: dorthy@example.com
+        name: Dorthy Gale
+        preferred_username: test-ldap-dorthy
+      providerName: user-group-operator-test
+      providerUserName: test-ldap-dorthy
+      user:
+        name: test-ldap-dorthy
+        uid: "{{ r_create_user_dorthy.result.metadata.uid }}"
+
+- name: Pause to ensure ldap connection error is enountered
+  pause:
+    seconds: 3
+
+- name: Restart LDAP server
+  kubernetes.core.k8s_scale:
+    api_version: apps/v1
+    kind: Deployment
+    name: test-ldap-server
+    namespace: "{{ test_namespace }}"
+    replicas: 1
+    wait_timeout: 120
+
+- name: Verify UserGroupMember created for test-ldap-dorthy
+  kubernetes.core.k8s_info:
+    api_version: usergroup.pfe.redhat.com/v1
+    kind: UserGroupMember
+    label_selectors:
+    - usergroup.pfe.redhat.com/config=test-ldap
+    - usergroup.pfe.redhat.com/user-uid={{ r_create_user_dorthy.result.metadata.uid }}
+  register: r_verify_user_group_member
+  failed_when: >-
+    r_verify_user_group_member.resources | length != 2 or
+    r_verify_user_group_member.resources[0].spec.group.name not in ['test-ldap-dev', 'test-ldap-developers'] or
+    r_verify_user_group_member.resources[0].spec.identity.name != 'user-group-operator-test:test-ldap-dorthy' or
+    r_verify_user_group_member.resources[0].spec.user.name != 'test-ldap-dorthy'
+  until: r_verify_user_group_member is success
+  retries: 20
+  delay: 3
