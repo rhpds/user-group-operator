@@ -523,7 +523,7 @@ class UserGroupConfigLDAP:
                         None, self.__noasync_get_group_names,
                         user, identity, logger
                     )
-                except ldap3.core.exceptions.LDAPSocketOpenError:
+                except (ldap3.core.exceptions.LDAPSocketOpenError, ldap3.core.exceptions.LDAPSocketReceiveError):
                     if attempt < retries:
                         logger.warning("LDAP connection failed, will retry")
                         attempt += 1
