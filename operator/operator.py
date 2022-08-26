@@ -268,6 +268,18 @@ class User:
     def uid(self):
         return self.metadata['uid']
 
+    async def cleanup_on_delete(self, logger):
+        user_group_member_list = await custom_objects_api.list_cluster_custom_object(
+            operator_domain, operator_version, 'usergroupmembers',
+            label_selector = f"usergroup.pfe.redhat.com/user-uid={self.uid}",
+        )
+        for user_group_member_definition in user_group_member_list.get('items', []):
+            user_group_member_name = user_group_member_definition['metadata']['name']
+            logger.info(f"Cleanup UserGroupMember {user_group_member_name} for deleted user {self.name}")
+            await custom_objects_api.delete_cluster_custom_object(
+                operator_domain, operator_version, 'usergroupmembers', user_group_member_name
+            )
+
     async def get_identities(self, logger, retries=0, retry_delay=1):
         if not self.identities:
             return []
@@ -902,8 +914,10 @@ async def group_handler(event, logger, **_):
 
 @kopf.on.event('user.openshift.io', 'v1', 'users')
 async def user_handler(event, logger, **_):
-    if event['type'] in ['ADDED', 'MODIFIED', None]:
-        user = User(event['object'])
+    user = User(event['object'])
+    if event['type'] == 'DELETED':
+        await user.cleanup_on_delete(logger=logger)
+    else:
         await user.manage_groups(logger=logger)
 
 
