@@ -268,6 +268,18 @@ class User:
     def uid(self):
         return self.metadata['uid']
 
+    async def cleanup_on_delete(self, logger):
+        user_group_member_list = await custom_objects_api.list_cluster_custom_object(
+            operator_domain, operator_version, 'usergroupmembers',
+            label_selector = f"usergroup.pfe.redhat.com/user-uid={self.uid}",
+        )
+        for user_group_member_definition in user_group_member_list.get('items', []):
+            user_group_member_name = user_group_member_definition['metadata']['name']
+            logger.info(f"Cleanup UserGroupMember {user_group_member_name} for deleted user {self.name}")
+            await custom_objects_api.delete_cluster_custom_object(
+                operator_domain, operator_version, 'usergroupmembers', user_group_member_name
+            )
+
     async def get_identities(self, logger, retries=0, retry_delay=1):
         if not self.identities:
             return []
@@ -523,7 +535,7 @@ class UserGroupConfigLDAP:
                         None, self.__noasync_get_group_names,
                         user, identity, logger
                     )
-                except (ldap3.core.exceptions.LDAPSocketOpenError, ldap3.core.exceptions.LDAPSocketReceiveError):
+                except ldap3.core.exceptions.LDAPCommunicationError:
                     if attempt < retries:
                         logger.warning("LDAP connection failed, will retry")
                         attempt += 1
@@ -902,8 +914,10 @@ async def group_handler(event, logger, **_):
 
 @kopf.on.event('user.openshift.io', 'v1', 'users')
 async def user_handler(event, logger, **_):
-    if event['type'] in ['ADDED', 'MODIFIED', None]:
-        user = User(event['object'])
+    user = User(event['object'])
+    if event['type'] == 'DELETED':
+        await user.cleanup_on_delete(logger=logger)
+    else:
         await user.manage_groups(logger=logger)
 
 
@@ -922,9 +936,13 @@ async def oauthaccesstoken_handler(event, logger, **_):
 
 @kopf.on.create('usergroup.pfe.redhat.com', 'v1', 'usergroupconfigs', id='usergroupconfig_create')
 @kopf.on.update('usergroup.pfe.redhat.com', 'v1', 'usergroupconfigs', id='usergroupconfig_update')
-async def usergroupconfig_event(name, spec, logger, **_):
+async def usergroupconfig_create_or_update(name, spec, logger, **_):
     config = UserGroupConfig.register(name=name, spec=spec)
     await config.manage_groups(logger=logger)
+
+@kopf.on.resume('usergroup.pfe.redhat.com', 'v1', 'usergroupconfigs')
+async def usergroupconfig_resume(name, spec, logger, **_):
+    UserGroupConfig.register(name=name, spec=spec)
 
 @kopf.daemon('usergroup.pfe.redhat.com', 'v1', 'usergroupconfigs', cancellation_timeout=1)
 async def usergroupconfig_daemon(stopped, name, spec, logger, **_):
