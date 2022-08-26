@@ -936,9 +936,13 @@ async def oauthaccesstoken_handler(event, logger, **_):
 
 @kopf.on.create('usergroup.pfe.redhat.com', 'v1', 'usergroupconfigs', id='usergroupconfig_create')
 @kopf.on.update('usergroup.pfe.redhat.com', 'v1', 'usergroupconfigs', id='usergroupconfig_update')
-async def usergroupconfig_event(name, spec, logger, **_):
+async def usergroupconfig_create_or_update(name, spec, logger, **_):
     config = UserGroupConfig.register(name=name, spec=spec)
     await config.manage_groups(logger=logger)
+
+@kopf.on.resume('usergroup.pfe.redhat.com', 'v1', 'usergroupconfigs')
+async def usergroupconfig_resume(name, spec, logger, **_):
+    UserGroupConfig.register(name=name, spec=spec)
 
 @kopf.daemon('usergroup.pfe.redhat.com', 'v1', 'usergroupconfigs', cancellation_timeout=1)
 async def usergroupconfig_daemon(stopped, name, spec, logger, **_):
