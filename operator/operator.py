@@ -49,7 +49,7 @@ class Group:
     async def register(definition):
         async with Group.lock:
             name = definition['metadata']['name']
-            group = Group.instances.get('name')
+            group = Group.instances.get(name)
             if group:
                 group.__init__(definition)
             else:
