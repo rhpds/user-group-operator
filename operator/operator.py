@@ -49,7 +49,7 @@ class Group:
     async def register(definition):
         async with Group.lock:
             name = definition['metadata']['name']
-            group = Group.instances.get('name')
+            group = Group.instances.get(name)
             if group:
                 group.__init__(definition)
             else:
@@ -609,7 +609,7 @@ class UserGroupConfigLDAP:
             tls = ldap3.Tls(
                 ca_certs_file = self.ca_cert_file,
                 validate = ssl.CERT_NONE if self.insecure else ssl.CERT_REQUIRED,
-                version = ssl.PROTOCOL_TLSv1
+                version = ssl.PROTOCOL_TLSv1_2,
             ),
             use_ssl = protocol == 'ldaps',
         )
