@@ -356,7 +356,11 @@ class UserGroupConfig:
 
     @property
     def refresh_interval(self):
-        return int(self.spec.get('refresh_interval', 3 * 60 * 60))
+        """
+        Interval to recheck user group memberships to detect changes in seconds.
+        Default 3 hours.
+        """
+        return int(self.spec.get('refreshInterval', 3 * 60 * 60))
 
     async def cleanup_on_delete(self, logger):
         _continue = None

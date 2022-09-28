@@ -179,10 +179,10 @@ spec:
                         Any other values are looked up in Identity `extra` data.
                         Default `name`.
                       type: string
-              refresh_interval:
+              refreshInterval:
                 description: >-
                   Interval to recheck user group memberships to detect changes in seconds.
-                  Default 3600 (1 hour).
+                  Default 10800 seconds (3 hours).
                 type: integer
                 minimum: 10
               salesforce:
