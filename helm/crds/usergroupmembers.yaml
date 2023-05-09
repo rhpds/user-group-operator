@@ -9,7 +9,6 @@ spec:
     plural: usergroupmembers
     singular: usergroupmember
     kind: UserGroupMember
-    shortNames: []
   versions:
   - name: v1
     additionalPrinterColumns:

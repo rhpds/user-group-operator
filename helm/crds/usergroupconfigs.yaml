@@ -9,7 +9,6 @@ spec:
     plural: usergroupconfigs
     singular: usergroupconfig
     kind: UserGroupConfig
-    shortNames: []
   versions:
   - name: v1
     served: true
