@@ -46,11 +46,17 @@ namespace:
 
 #ldapSecrets:
 #- name: ldap-auth
+#  bitwardenSecretName: ...
+#  bitwardenSecretKey: ...
+# or:
 #  bindDn: uid=reader,cn=users,dc=example,dc=com
 #  bindPassword: password
 
 #salesforceSecrets:
 #- name: salesforce-consumer-secret
+#  bitwardenSecretName: ...
+#  bitwardenSecretKey: ...
+# or:
 #  consumerSecret: |
 #    -----BEGIN PRIVATE KEY-----
 #    ...
