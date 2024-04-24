@@ -1,0 +1,114 @@
+---
+- name: Create Test Business Partner User
+  kubernetes.core.k8s:
+    definition:
+      apiVersion: user.openshift.io/v1
+      kind: User
+      metadata:
+        name: "{{ test_api_business_partner_user }}"
+      identities:
+      - user-group-operator-test:{{ test_api_business_partner_user }}
+  register: r_create_business_partner_user
+
+- name: Create Identity for business partner user
+  kubernetes.core.k8s:
+    definition:
+      apiVersion: user.openshift.io/v1
+      kind: Identity
+      metadata:
+        name: user-group-operator-test:{{ test_api_business_partner_user }}
+      extra:
+        email: "{{ test_api_business_partner_user }}"
+      providerName: user-group-operator-test
+      providerUserName: "{{ test_api_business_partner_user }}"
+      user:
+        name: "{{ test_api_business_partner_user }}"
+        uid: "{{ r_create_business_partner_user.result.metadata.uid }}"
+
+- name: Create Secret for test-api-auth
+  kubernetes.core.k8s:
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: test-api-auth
+        namespace: "{{ test_namespace }}"
+      data:
+        parameters: "{{ test_api_auth.parameters | to_json | b64encode }}"
+        type: "{{ test_api_auth.type | b64encode }}"
+        url: "{{ test_api_auth.url | b64encode }}"
+
+- name: Create test-api UserGroupConfig
+  kubernetes.core.k8s:
+    definition:
+      apiVersion: usergroup.pfe.redhat.com/v1
+      kind: UserGroupConfig
+      metadata:
+        name: test-api
+      spec:
+        api:
+        - authSecret:
+            name: test-api-auth
+          groupMappings:
+          - jmesPath: isPartner
+            valueToGroup:
+            - group: partner
+              value: true
+          - jmesPath: businessPartner
+            valueToGroup:
+            - group: business-partner
+              value: true
+          - jmesPath: techPartner
+            valueToGroup:
+            - group: tech-partner
+              value: true
+          url: "{{ vars.test_api_lookup_url }}"
+
+- name: Verify UserGroupMember created for business partner user
+  kubernetes.core.k8s_info:
+    api_version: usergroup.pfe.redhat.com/v1
+    kind: UserGroupMember
+    label_selectors:
+    - usergroup.pfe.redhat.com/config=test-api
+    - usergroup.pfe.redhat.com/user-uid={{ r_create_business_partner_user.result.metadata.uid }}
+  register: r_verify_user_group_member
+  vars:
+    _partner_user_group_member: >-
+      {{ r_verify_user_group_member.resources | json_query("[?spec.group.name=='partner']|[0]") }}
+    _business_partner_user_group_member: >-
+      {{ r_verify_user_group_member.resources | json_query("[?spec.group.name=='business-partner']|[0]") }}
+  failed_when: >-
+    r_verify_user_group_member.resources | length != 2 or
+    _partner_user_group_member.spec.identity.name != 'user-group-operator-test:' ~ test_api_business_partner_user or
+    _partner_user_group_member.spec.user.name != test_api_business_partner_user or
+    _business_partner_user_group_member.spec.identity.name != 'user-group-operator-test:' ~ test_api_business_partner_user or
+    _business_partner_user_group_member.spec.user.name != test_api_business_partner_user
+  until: r_verify_user_group_member is success
+  retries: 10
+  delay: 1
+
+- name: Verify Group partner has test business user
+  kubernetes.core.k8s_info:
+    api_version: user.openshift.io/v1
+    kind: Group
+    name: partner
+  register: r_verify_group
+  failed_when: >-
+    r_verify_group.resources | length != 1 or
+    r_verify_group.resources[0].users != [test_api_business_partner_user]
+  until: r_verify_group is success
+  retries: 10
+  delay: 1
+
+- name: Verify Group business_partner has test business user
+  kubernetes.core.k8s_info:
+    api_version: user.openshift.io/v1
+    kind: Group
+    name: business_partner
+  register: r_verify_partner_group
+  failed_when: >-
+    r_verify_group.resources | length != 1 or
+    r_verify_group.resources[0].users != [test_api_business_partner_user]
+  until: r_verify_group is success
+  retries: 10
+  delay: 1

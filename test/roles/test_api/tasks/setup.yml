@@ -1,0 +1,7 @@
+---
+- name: Make sure API variables are defined
+  assert:
+    that:
+    - vars.test_api_auth is defined
+    - vars.test_api_business_partner_user is defined
+    - vars.test_api_lookup_url is defined
