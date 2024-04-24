@@ -5,6 +5,10 @@ kind: UserGroupConfig
 metadata:
   name: cluster
 spec:
+  {{- if .Values.config.api }}
+  api:
+    {{- toYaml .Values.config.api | nindent 4 }}
+  {{- end }}
   {{- if .Values.config.emailDomainGroups }}
   emailDomainGroups:
     {{- toYaml .Values.config.emailDomainGroups | nindent 4 }}

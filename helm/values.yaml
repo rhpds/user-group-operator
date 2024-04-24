@@ -16,6 +16,18 @@ namespace:
 #  identityProviderGroups:
 #    enable: false
 #    prefix: identity-provider.
+#  api:
+#  - url: https://example.com/user/lookup
+#    authSecret:
+#      name: api-auth
+#    groupMappings:
+#    # Add user to admin group depending of value in "isAdmin" field
+#    - jmesPath: isAdmin
+#      valueToGroup:
+#      - group: admin
+#        value: true
+#    # Add user to groups with names that match the "roles" field returned by the API
+#    - jmesPath: roles
 #  ldap:
 #  - url: ldaps://ipa.example.com
 #    authSecret:
@@ -43,6 +55,14 @@ namespace:
 #   userSearchField: federationId
 #   userSearchValue: name
 #   username: username@example.com
+
+#apiSecrets:
+#- name: test-api-auth
+#  bitwardenSecretName: partner_api_secret
+# or:
+#  parameters: ...
+#  url: ...
+
 
 #ldapSecrets:
 #- name: ldap-auth
