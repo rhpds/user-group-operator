@@ -1,0 +1,7 @@
+---
+- name: Remove Secret for test-api-auth
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: Secret
+    name: test-api-auth
+    namespace: "{{ test_namespace }}"

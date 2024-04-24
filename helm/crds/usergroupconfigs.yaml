@@ -42,6 +42,76 @@ spec:
               User Group Operator configuration.
             type: object
             properties:
+              api:
+                description: >-
+                  Query specified API to discover group membership.
+                type: array
+                items:
+                  type: object
+                  required:
+                  - authSecret
+                  - url
+                  properties:
+                    authSecret:
+                      description: >-
+                        Credentials used to authenticate to the API.
+                      type: object
+                      required:
+                      - name
+                      properties:
+                        name:
+                          description: >-
+                            Name of the API authentication secret.
+                          type: string
+                        namespace:
+                          description: >-
+                            Namespace of the API authentication secret.
+                            If not provided then the namespace of the operator will be assumed.
+                          type: string
+                    groupMappings:
+                      description: >-
+                        API response field to map to OpenShift groups.
+                      type: array
+                      items:
+                        type: object
+                        required:
+                        - jmesPath
+                        properties:
+                          jmesPath:
+                            description: >-
+                              JMESPath expression to extract value from the API response.
+                              Ex: "user.roles".
+                              If an array is extracted then it is treated as multiple values.
+                            type: string
+                          valueToGroup:
+                            description: >-
+                              Specific values to match to groups.
+                              If none are specified then values are converted to strings and mapped to groups.
+                            type: array
+                            items:
+                              type: object
+                              # To allow value of any type.
+                              x-kubernetes-preserve-unknown-fields: true
+                              properties:
+                                group:
+                                  description: >-
+                                    OpenShift group name to associate to the user entry.
+                                  type: string
+                                groups:
+                                  description: >-
+                                    OpenShift group names to associate to the user entry.
+                                  type: array
+                                  items:
+                                    type: string
+                    identityProviderName:
+                      description: >-
+                        Identity provider name for which to perform API lookups.
+                        If not specified then an attempt will be made to lookup all users.
+                      type: string
+                    url:
+                      description: >-
+                        URL template used to contact the API.
+                      type: string
               emailDomainGroups:
                 description: >-
                   Use email domain in identity record to define group.
@@ -169,7 +239,6 @@ spec:
                     userSearchAttribute:
                       description: >-
                         Name attribute used to find users in the directory from the user name.
-                        Default 
                       type: string
                     userSearchValue:
                       description: >-

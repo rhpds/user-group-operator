@@ -46,6 +46,47 @@ spec:
     prefix: identity-provider.
 ---------------------------------------
 
+### API Group Query
+
+The API group query accesses an arbitrary API endpoint and uses the response to define groups.
+
+---------------------------------------------------
+apiVersion: usergroup.pfe.redhat.com/v1
+kind: UserGroupConfig
+metadata:
+  name: api
+spec:
+  api:
+  - url: https://example.com/user/lookup
+    authSecret:
+      name: api-auth
+    groupMappings:
+    # Add user to admin group depending of value in "isAdmin" field
+    - jmesPath: isAdmin
+      valueToGroup:
+      - group: admin
+        value: true
+    # Add user to groups with names that match the "roles" field returned by the API
+    - jmesPath: roles
+---------------------------------------------------
+
+The auth secret currently only supports a JWT token style interface.
+An example auth secret could have:
+
+---------------------------------------------------
+apiVersion: v1
+kind: Secret
+metadata:
+  name: auth
+stringData:
+  parameters: |
+    grant_type: client_credentials
+    client_id: openshift-user-group-operator
+    client_secret: some-secret-string
+  type: jwt
+  url: https://sso.examplec.om/auth/token
+---------------------------------------------------
+
 ### LDAP Group Mapping
 
 OpenShift includes LDAP sync capabilities with `oc adm groups sync`:

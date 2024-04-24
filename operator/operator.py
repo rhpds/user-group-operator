@@ -1,21 +1,26 @@
+import aiohttp
 import asyncio
-import copy
+import jmespath
 import kopf
 import kubernetes_asyncio
 import ldap3
 import logging
 import os
 import re
+import requests
 import simple_salesforce
 import ssl
 import tempfile
+import yaml
 
 from base64 import b64decode
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
+from time import time
 
 from configure_kopf_logging import configure_kopf_logging
 from infinite_relative_backoff import InfiniteRelativeBackoff
+from simplejinja import jinja2process
 
 operator_domain = os.environ.get('OPERATOR_DOMAIN', 'usergroup.pfe.redhat.com')
 operator_version = os.environ.get('OPERATOR_VERSION', 'v1')
@@ -207,6 +212,9 @@ class Identity:
         self.provider_user_name = definition.get('providerUserName')
         self.user = definition.get('user')
 
+    def __str__(self):
+        return f"User {self.name}"
+
     @property
     def email(self):
         return self.extra.get('email')
@@ -240,6 +248,9 @@ class User:
     def __init__(self, definition):
         self.identities = definition.get('identities')
         self.metadata = definition['metadata']
+
+    def __str__(self):
+        return f"User {self.name}"
 
     @property
     def creation_datetime(self):
@@ -330,6 +341,9 @@ class UserGroupConfig:
     def __init__(self, name, spec):
         self.name = name
         self.spec = spec
+        self.api = [
+            UserGroupConfigAPI(item) for item in spec['api']
+        ] if 'api' in self.spec else []
         self.ldap = [
             UserGroupConfigLDAP(item) for item in spec['ldap']
         ] if 'ldap' in self.spec else []
@@ -405,6 +419,13 @@ class UserGroupConfig:
                         self.email_domain_groups_prefix + domain
                     )
 
+            for api in self.api:
+                if not api.identity_provider_name \
+                or api.identity_provider_name == identity.provider_name:
+                    identity_group_names.update(
+                        await api.get_group_names(user, identity, logger)
+                    )
+
             for ldap in self.ldap:
                 if not ldap.identity_provider_name \
                 or ldap.identity_provider_name == identity.provider_name:
@@ -478,6 +499,158 @@ class UserGroupConfig:
 
     def unregister(self):
         return UserGroupConfig.__configs.pop(self.name)
+
+
+class UserGroupConfigAPI:
+    def __init__(self, definition):
+        self.group_mappings = [
+            UserGroupConfigAPIGroupMapping(item) for item in definition.get('groupMappings', [])
+        ]
+        self.auth_secret = UserGroupConfigAPIAuthSecret(definition['authSecret'])
+        self.access_token = None
+        self.access_token_renew = None
+        self.identity_provider_name = definition.get('identityProviderName')
+        self.lock = asyncio.Lock()
+        self.url = definition['url']
+
+    async def get_access_token(self, logger):
+        if self.access_token and self.access_token_renew > time():
+            return self.access_token
+
+        headers = {"cache-control": "no-cache"}
+        data = await self.auth_secret.get_parameters()
+        url = await self.auth_secret.get_url()
+
+        logger.info(f"Getting access token from {url}")
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, data=data) as response:
+                resp = await response.json()
+                self.access_token = resp.get('access_token')
+                self.access_token_renew = time() + resp.get('expires_in') - 10
+                return self.access_token
+
+    async def get_api_response(self, user, identity, logger, retries=5):
+        async with self.lock:
+            attempt = 0
+            access_token = await self.get_access_token(logger=logger)
+            headers = {"cache-control": "no-cache"}
+            headers['Authorization'] = f"Bearer {access_token}"
+            url = jinja2process(self.url, variables=dict(user=user, identity=identity))
+
+            while True:
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(url, headers=headers) as response:
+                            return await response.json()
+                except Exception as exception:
+                    if attempt < retries:
+                        logger.warning(f"API error: {exception}")
+                        attempt += 1
+                        await asyncio.sleep(5)
+                    else:
+                        raise
+
+    async def get_group_names(self, user, identity, logger):
+        api_response = await self.get_api_response(user=user, identity=identity, logger=logger)
+        group_names = set()
+        for group_mapping in self.group_mappings:
+            src = jmespath.search(group_mapping.jmes_path, api_response)
+            if src == None:
+                continue
+            if not isinstance(src, list):
+                src = [src]
+            for value in src:
+                if group_mapping.value_to_group:
+                    for value_to_group in group_mapping.value_to_group:
+                        if value == value_to_group.value:
+                            group_names.update(value_to_group.get_groups(value))
+                else:
+                    group_names.add(value)
+        return group_names
+
+
+class UserGroupConfigAPIGroupMapping:
+    def __init__(self, definition):
+        self.jmes_path = definition['jmesPath']
+        self.value_to_group = [
+            UserGroupConfigAPIGroupMappingValueToGroup(item) for item in definition['valueToGroup']
+        ] if 'valueToGroup' in definition else None
+
+
+class UserGroupConfigAPIGroupMappingValueToGroup:
+    def __init__(self, definition):
+        self.group = definition.get('group')
+        self.groups = definition.get('groups')
+        self.value = definition.get('value')
+
+    def get_groups(self, default_group_name):
+        if self.group == None and self.groups == None:
+            return default_group_name
+        else:
+            return (self.groups or []) + ([self.group] if self.group else [])
+
+
+class UserGroupConfigAPIAuthSecret:
+    def __init__(self, definition):
+        self.name = definition['name']
+        self._secret_data_loaded = False
+        self.namespace = definition.get('namespace', operator_namespace)
+
+    async def _read_secret(self):
+        '''
+        Attempt to read API auth secret with retries in case the configuration was created before the secret.
+        '''
+        if self._secret_data_loaded:
+            return
+        attempt = 0
+        while True:
+            try:
+                secret = await core_v1_api.read_namespaced_secret(self.name, self.namespace)
+                if 'type' not in secret.data:
+                    raise kopf.TemporaryError(
+                        f"Auth secret {self.name} in {self.namespace} does not have data.type",
+                        delay=600
+                    )
+                self._type = b64decode(secret.data['type']).decode('utf-8')
+                if self._type == 'jwt':
+                    if 'url' not in secret.data:
+                        raise kopf.TemporaryError(
+                            f"JWT auth secret does not specify data.url",
+                            delay=600
+                        )
+                    self._url = b64decode(secret.data['url']).decode('utf-8')
+                    if 'parameters' not in secret.data:
+                        raise kopf.TemporaryError(
+                            f"JWT auth secret does not specify data.parameters",
+                            delay=600
+                        )
+                    self._parameters = yaml.safe_load(b64decode(secret.data['parameters']).decode('utf-8'))
+                    self._secret_data_loaded = True
+                    return
+                else:
+                    raise kopf.TemporaryError(
+                        f"Unknown auth type '{self.type}' from auth ecret {self.name} in {self.namespace}",
+                        delay=600
+                    )
+            except kubernetes_asyncio.client.exceptions.ApiException as e:
+                if e.status == 404 and attempt < 10:
+                    attempt += 1
+                    await asyncio.sleep(0.5)
+                else:
+                    raise
+
+    async def get_parameters(self):
+        await self._read_secret()
+        return self._parameters
+
+    async def get_type(self):
+        await self._read_secret()
+        return self._type
+
+    async def get_url(self):
+        await self._read_secret()
+        return self._url
 
 
 class UserGroupConfigLDAP:
@@ -657,7 +830,7 @@ class UserGroupConfigLDAPAuthSecret:
 
     async def _read_secret(self):
         '''
-        Attempt to read LDAP secret with retries in case the configuration was created befor the secret.
+        Attempt to read LDAP secret with retries in case the configuration was created before the secret.
         '''
         attempt = 0
         while True:
@@ -773,7 +946,7 @@ class UserGroupConfigSalesforceConsumerSecret:
 
     async def _read_secret_to_tempfile(self):
         '''
-        Attempt to read Salesforce client secret with retries in case the configuration was created befor the secret.
+        Attempt to read Salesforce client secret with retries in case the configuration was created before the secret.
         '''
         attempt = 0
         while True:

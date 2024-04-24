@@ -1,0 +1,73 @@
+---
+- name: Cleanup for test-api UserGroupConfig
+  kubernetes.core.k8s:
+    state: absent
+    api_version: usergroup.pfe.redhat.com/v1
+    kind: UserGroupConfig
+    name: test-api
+
+- name: Cleanup Users for test-api
+  kubernetes.core.k8s:
+    state: absent
+    api_version: user.openshift.io/v1
+    kind: User
+    name: "{{ __user_name }}"
+  loop:
+  - "{{ test_api_business_partner_user }}"
+  loop_control:
+    loop_var: __user_name
+
+- name: Cleanup Identities for test-api
+  kubernetes.core.k8s:
+    state: absent
+    api_version: user.openshift.io/v1
+    kind: Identity
+    name: "{{ __identity_name }}"
+  loop:
+  - user-group-operator-test:{{ test_api_business_partner_user }}
+  loop_control:
+    loop_var: __identity_name
+
+- name: Cleanup Groups for test-api
+  kubernetes.core.k8s:
+    state: absent
+    api_version: user.openshift.io/v1
+    kind: Group
+    name: "{{ __group_name }}"
+  loop:
+  - business-partner
+  - partner
+  loop_control:
+    loop_var: __group_name
+
+- name: Get list of UserGroupMembers for test-api
+  kubernetes.core.k8s_info:
+    api_version: usergroup.pfe.redhat.com/v1
+    kind: UserGroupMember
+    label_selectors:
+    - usergroup.pfe.redhat.com/config=test-api
+  register: r_user_group_members
+
+- name: Remove finalizers for UserGroupMembers for test-api
+  kubernetes.core.k8s:
+    api_version: usergroup.pfe.redhat.com/v1
+    kind: UserGroupMember
+    name: "{{ __user_group_member.metadata.name }}"
+    definition:
+      metadata:
+        finalizers: []
+  loop: "{{ r_user_group_members.resources }}"
+  loop_control:
+    label: "{{ __user_group_member.metadata.name }}"
+    loop_var: __user_group_member
+
+- name: Cleanup UserGroupMembers for test-api
+  kubernetes.core.k8s:
+    state: absent
+    api_version: usergroup.pfe.redhat.com/v1
+    kind: UserGroupMember
+    name: "{{ __user_group_member.metadata.name }}"
+  loop: "{{ r_user_group_members.resources }}"
+  loop_control:
+    label: "{{ __user_group_member.metadata.name }}"
+    loop_var: __user_group_member

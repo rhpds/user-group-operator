@@ -3,3 +3,5 @@
 .odo/
 .odo/env
 .odo/odo-file-index.json
+operator/__pycache__
+test-vars.yaml
