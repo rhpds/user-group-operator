@@ -13,7 +13,7 @@ spec:
   emailDomainGroups:
     {{- toYaml .Values.config.emailDomainGroups | nindent 4 }}
   {{- end }}
-  {{- if .Values.config.emailDomainGroups }}
+  {{- if .Values.config.identityProviderGroups }}
   identityProviderGroups:
     {{- toYaml .Values.config.identityProviderGroups | nindent 4 }}
   {{- end }}
