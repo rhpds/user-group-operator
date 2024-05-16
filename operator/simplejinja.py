@@ -1,7 +1,9 @@
+from base64 import b64decode
 from distutils.util import strtobool
 
 import copy
 import jinja2
+import jmespath
 
 def error_if_undefined(result):
     if isinstance(result, jinja2.Undefined):
@@ -14,6 +16,7 @@ j2env = jinja2.Environment(
     undefined = jinja2.ChainableUndefined,
 )
 j2env.filters['bool'] = lambda x: bool(strtobool(x)) if isinstance(x, str) else bool(x)
+j2env.filters['b64decode'] = lambda x: b64decode(x.encode('utf-8') + b'==').decode('utf-8')
 j2env.filters['json_query'] = lambda x, query: jmespath.search(query, x)
 
 def jinja2process(template, omit=None, template_style='jinja2', variables={}):
