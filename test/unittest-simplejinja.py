@@ -37,5 +37,25 @@ class TestJsonPatch(unittest.TestCase):
             "bar"
         )
 
+    def test_03(self):
+        template = {}
+        template_vars = {
+            "src": "abcdefg"
+        }
+        self.assertEqual(
+            jinja2process("{{ src | regex_replace('^abc') }}", variables=template_vars),
+            "defg"
+        )
+
+    def test_04(self):
+        template = {}
+        template_vars = {
+            "src": "ABCDEFG"
+        }
+        self.assertEqual(
+            jinja2process("{{ src | regex_replace('^abc', ignorecase=true) }}", variables=template_vars),
+            "DEFG"
+        )
+
 if __name__ == '__main__':
     unittest.main()
