@@ -101,8 +101,9 @@ oc start-build user-group-operator --from-dir=. --follow
 +
 --------------------------------------------------------------------------------
 helm template helm \
---set namespace.create=false \
---set namespace.name=user-group-operator \
+--include-crds \
+--set=namespace.create=false \
+--set=namespace.name=user-group-operator \
 --set=image.tagOverride=- \
 --set=image.repository=$(oc get imagestream user-group-operator -o jsonpath='{.status.tags[?(@.tag=="latest")].items[0].dockerImageReference}') \
 | oc apply -f -

@@ -1,8 +1,9 @@
 {{- if .Values.namespace.create -}}
+---
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: {{ include "userGroupOperator.namespaceName" . }}
+  name: {{ include ".namespaceName" . }}
   labels:
     {{- include "userGroupOperator.labels" . | nindent 4 }}
 {{- end -}}

@@ -52,6 +52,23 @@ spec:
                   - authSecret
                   - url
                   properties:
+                    accessTokenSecret:
+                      description: >-
+                        Specifies secret in which to store generated access token.
+                        This secret is automatically managed and update when the token is rotated.
+                      type: object
+                      required:
+                      - name
+                      properties:
+                        name:
+                          description: >-
+                            Name of the secret.
+                          type: string
+                        namespace:
+                          description: >-
+                            Namespace of the secret.
+                            If not provided then the namespace of the operator will be assumed.
+                          type: string
                     authSecret:
                       description: >-
                         Credentials used to authenticate to the API.
@@ -108,9 +125,23 @@ spec:
                         Identity provider name for which to perform API lookups.
                         If not specified then an attempt will be made to lookup all users.
                       type: string
+                    request:
+                      type: object
+                      properties:
+                        jsonData:
+                          type: object
+                          additionalProperties:
+                            type: string
+                        method:
+                          enum:
+                          - GET
+                          - POST
+                          type: string
                     url:
                       description: >-
                         URL template used to contact the API.
+                      type: string
+                    when:
                       type: string
               emailDomainGroups:
                 description: >-

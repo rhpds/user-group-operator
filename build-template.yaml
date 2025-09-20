@@ -3,14 +3,11 @@ apiVersion: template.openshift.io/v1
 kind: Template
 metadata:
   annotations:
-    description: user-group-operator deploy
+    description: |
+      Build template for GitHub runner image for local testing.
   name: user-group-operator-build
 
 parameters:
-- name: KOPF_S2I_IMAGE
-  value: quay.io/redhat-cop/python-kopf-s2i:v1.37
-- name: GIT_REPO
-  value: https://github.com/redhat-pfe/user-group-operator.git
 - name: NAME
   value: user-group-operator
 
@@ -40,9 +37,7 @@ objects:
         uri: ${GIT_REPO}
         ref: master
     strategy:
-      type: Source
-      sourceStrategy:
-        from:
-          kind: DockerImage
-          name: ${KOPF_S2I_IMAGE}
+      type: Docker
+      dockerStrategy:
+        dockerfilePath: Containerfile
     triggers: []

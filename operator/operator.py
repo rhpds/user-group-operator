@@ -1,32 +1,51 @@
-import aiohttp
 import asyncio
-import jmespath
-import kopf
-import kubernetes_asyncio
-import ldap3
+import json
 import logging
 import os
 import re
-import requests
-import simple_salesforce
 import ssl
 import tempfile
-import yaml
-
-from base64 import b64decode
+from base64 import b64decode, b64encode
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from time import time
 
+import aiohttp
+import jmespath
+import kopf
+import kubernetes_asyncio
+import ldap3
+import simple_salesforce
+import yaml
 from configure_kopf_logging import configure_kopf_logging
 from infinite_relative_backoff import InfiniteRelativeBackoff
-from simplejinja import jinja2process
+from simplejinja import check_condition, jinja2process
 
 operator_domain = os.environ.get('OPERATOR_DOMAIN', 'usergroup.pfe.redhat.com')
 operator_version = os.environ.get('OPERATOR_VERSION', 'v1')
 operator_start_datetime = datetime.now(timezone.utc)
 
-core_v1_api = custom_objects_api = operator_namespace = None
+class Operator:
+    api_client = None
+    core_v1_api = None
+    custom_objects_api = None
+    operator_namespace = None
+
+    @classmethod
+    async def on_startup(cls):
+        if os.path.exists('/run/secrets/kubernetes.io/serviceaccount/token'):
+            kubernetes_asyncio.config.load_incluster_config()
+            with open('/run/secrets/kubernetes.io/serviceaccount/namespace', encoding='utf-8') as f:
+                cls.operator_namespace = f.read()
+        else:
+            await kubernetes_asyncio.config.load_kube_config()
+            cls.operator_namespace = kubernetes_asyncio.config.list_kube_config_contexts()[1]['context']['namespace']
+
+        cls.api_client = kubernetes_asyncio.client.ApiClient()
+        cls.core_v1_api = kubernetes_asyncio.client.CoreV1Api(cls.api_client)
+        cls.custom_objects_api = kubernetes_asyncio.client.CustomObjectsApi(cls.api_client)
+
+    await UserGroupConfig.preload()
 
 class Group:
     instances = {}
@@ -38,7 +57,7 @@ class Group:
             if group_name in Group.instances:
                 return Group.instances[group_name]
             try:
-                definition = await custom_objects_api.get_cluster_custom_object(
+                definition = await Operator.custom_objects_api.get_cluster_custom_object(
                     'user.openshift.io', 'v1', 'groups', group_name
                 )
                 group = Group(definition)
@@ -108,7 +127,7 @@ class Group:
                     if user_name in self.users:
                         return
                     if self.uid:
-                        definition = await custom_objects_api.replace_cluster_custom_object(
+                        definition = await Operator.custom_objects_api.replace_cluster_custom_object(
                             'user.openshift.io', 'v1', 'groups', self.name,
                             {
                                 "apiVersion": "user.openshift.io/v1",
@@ -119,7 +138,7 @@ class Group:
                         )
                         logger.info(f"Added {user_name} to group {self.name}")
                     else:
-                        definition = await custom_objects_api.create_cluster_custom_object(
+                        definition = await Operator.custom_objects_api.create_cluster_custom_object(
                             'user.openshift.io', 'v1', 'groups',
                             {
                                 "apiVersion": "user.openshift.io/v1",
@@ -145,7 +164,7 @@ class Group:
 
     async def refresh(self, logger):
         try:
-            definition = await custom_objects_api.get_cluster_custom_object(
+            definition = await Operator.custom_objects_api.get_cluster_custom_object(
                 'user.openshift.io', 'v1', 'groups', self.name,
             )
             self.__init__(definition)
@@ -164,7 +183,7 @@ class Group:
                 if user_name not in self.users:
                     return
                 try:
-                    definition = await custom_objects_api.replace_cluster_custom_object(
+                    definition = await Operator.custom_objects_api.replace_cluster_custom_object(
                         'user.openshift.io', 'v1', 'groups', self.name,
                         {
                             "apiVersion": "user.openshift.io/v1",
@@ -181,7 +200,7 @@ class Group:
                         # No group? consider the user removed!
                         Group.unregister(self.name)
                         return
-                    elif e.status == 409 and attempt < retries:
+                    if e.status == 409 and attempt < retries:
                         # Conflict, refresh from API and retry
                         attempt += 1
                     else:
@@ -193,7 +212,7 @@ class Identity:
     async def get(name, logger=None, retries=0, retry_delay=1):
         while True:
             try:
-                definition = await custom_objects_api.get_cluster_custom_object(
+                definition = await Operator.custom_objects_api.get_cluster_custom_object(
                     'user.openshift.io', 'v1', 'identities', name
                 )
                 return Identity(definition)
@@ -213,7 +232,7 @@ class Identity:
         self.user = definition.get('user')
 
     def __str__(self):
-        return f"User {self.name}"
+        return f"Identity {self.name}"
 
     @property
     def email(self):
@@ -222,6 +241,14 @@ class Identity:
     @property
     def name(self):
         return self.metadata['name']
+
+    @property
+    def providerName(self):
+        return self.provider_name
+
+    @property
+    def providerUserName(self):
+        return self.provider_user_name
 
     @property
     def ref(self):
@@ -240,7 +267,7 @@ class Identity:
 class User:
     @staticmethod
     async def get(name):
-        definition = await custom_objects_api.get_cluster_custom_object(
+        definition = await Operator.custom_objects_api.get_cluster_custom_object(
             'user.openshift.io', 'v1', 'users', name
         )
         return User(definition)
@@ -280,14 +307,14 @@ class User:
         return self.metadata['uid']
 
     async def cleanup_on_delete(self, logger):
-        user_group_member_list = await custom_objects_api.list_cluster_custom_object(
+        user_group_member_list = await Operator.custom_objects_api.list_cluster_custom_object(
             operator_domain, operator_version, 'usergroupmembers',
             label_selector = f"usergroup.pfe.redhat.com/user-uid={self.uid}",
         )
         for user_group_member_definition in user_group_member_list.get('items', []):
             user_group_member_name = user_group_member_definition['metadata']['name']
             logger.info(f"Cleanup UserGroupMember {user_group_member_name} for deleted user {self.name}")
-            await custom_objects_api.delete_cluster_custom_object(
+            await Operator.custom_objects_api.delete_cluster_custom_object(
                 operator_domain, operator_version, 'usergroupmembers', user_group_member_name
             )
 
@@ -318,7 +345,7 @@ class UserGroupConfig:
     @staticmethod
     async def preload():
         # Preload all UserGroupConfig definitions
-        user_group_configs_list = await custom_objects_api.list_cluster_custom_object(
+        user_group_configs_list = await Operator.custom_objects_api.list_cluster_custom_object(
             operator_domain, operator_version, 'usergroupconfigs'
         )
 
@@ -380,7 +407,7 @@ class UserGroupConfig:
         _continue = None
         user_group_member_names = []
         while True:
-            user_group_member_list = await custom_objects_api.list_cluster_custom_object(
+            user_group_member_list = await Operator.custom_objects_api.list_cluster_custom_object(
                 operator_domain, operator_version, 'usergroupmembers',
                 _continue = _continue,
                 label_selector = f"usergroup.pfe.redhat.com/config={self.name}",
@@ -395,7 +422,7 @@ class UserGroupConfig:
 
         for user_group_member_name in user_group_member_names:
             logger.info(f"Cleanup UserGroupMember {user_group_member_name} on UserGroupConfig deletion")
-            user_group_member_list = await custom_objects_api.delete_cluster_custom_object(
+            user_group_member_list = await Operator.custom_objects_api.delete_cluster_custom_object(
                 operator_domain, operator_version, 'usergroupmembers', user_group_member_name
             )
 
@@ -451,7 +478,7 @@ class UserGroupConfig:
 
             group_names.update(identity_group_names)
 
-        user_group_member_list = await custom_objects_api.list_cluster_custom_object(
+        user_group_member_list = await Operator.custom_objects_api.list_cluster_custom_object(
             operator_domain, operator_version, 'usergroupmembers',
             label_selector = f"usergroup.pfe.redhat.com/config={self.name},usergroup.pfe.redhat.com/user-uid={user.uid}",
         )
@@ -460,7 +487,7 @@ class UserGroupConfig:
             group_name = user_group_member_definition['spec']['group']['name']
             if group_name not in group_names:
                 logger.info(f"Cleanup UserGroupMember {name}")
-                await custom_objects_api.delete_cluster_custom_object(
+                await Operator.custom_objects_api.delete_cluster_custom_object(
                     operator_domain, operator_version, 'usergroupmembers', name
                 )
 
@@ -474,7 +501,7 @@ class UserGroupConfig:
         last_processed_user_name = None
         while True:
             try:
-                user_list = await custom_objects_api.list_cluster_custom_object(
+                user_list = await Operator.custom_objects_api.list_cluster_custom_object(
                     'user.openshift.io', 'v1', 'users',
                     _continue = _continue,
                     limit = 50,
@@ -506,41 +533,34 @@ class UserGroupConfigAPI:
         self.group_mappings = [
             UserGroupConfigAPIGroupMapping(item) for item in definition.get('groupMappings', [])
         ]
-        self.auth_secret = UserGroupConfigAPIAuthSecret(definition['authSecret'])
-        self.access_token = None
-        self.access_token_renew = None
+        self.auth = UserGroupConfigAPIAuth(definition['authSecret'])
         self.identity_provider_name = definition.get('identityProviderName')
         self.lock = asyncio.Lock()
+        request = definition.get('request', {})
+        self.request_json_data = request.get('jsonData')
+        self.request_method = request.get('method', 'GET')
         self.url = definition['url']
-
-    async def get_access_token(self, logger):
-        if self.access_token and self.access_token_renew > time():
-            return self.access_token
-
-        headers = {"cache-control": "no-cache"}
-        data = await self.auth_secret.get_parameters()
-        url = await self.auth_secret.get_url()
-
-        logger.info(f"Getting access token from {url}")
-
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, headers=headers, data=data) as response:
-                resp = await response.json()
-                self.access_token = resp.get('access_token')
-                self.access_token_renew = time() + resp.get('expires_in') - 10
-                return self.access_token
+        self.when = definition.get('when')
 
     async def get_api_response(self, user, identity, logger, retries=5):
         async with self.lock:
             attempt = 0
-            access_token = await self.get_access_token(logger=logger)
+            access_token = await self.auth.get_access_token(logger=logger)
             headers = {"cache-control": "no-cache"}
             headers['Authorization'] = f"Bearer {access_token}"
-            url = jinja2process(self.url, variables=dict(user=user, identity=identity))
+            jinja_vars = {"user": user, "identity": identity}
+            url = jinja2process(self.url, variables=jinja_vars)
 
             while True:
                 try:
                     async with aiohttp.ClientSession() as session:
+                        if self.request_method == 'POST':
+                            json_data = {
+                                key: jinja2process(value, variables=jinja_vars)
+                                for key, value in self.request_json_data.items()
+                            }
+                            async with session.post(url, headers=headers, json=json_data) as response:
+                                return await response.json()
                         async with session.get(url, headers=headers) as response:
                             return await response.json()
                 except Exception as exception:
@@ -552,11 +572,18 @@ class UserGroupConfigAPI:
                         raise
 
     async def get_group_names(self, user, identity, logger):
-        api_response = await self.get_api_response(user=user, identity=identity, logger=logger)
         group_names = set()
+        jinja_vars = {"user": user, "identity": identity}
+        if (
+            self.when and
+            not check_condition(self.when, variables=jinja_vars)
+        ):
+            return group_names
+
+        api_response = await self.get_api_response(user=user, identity=identity, logger=logger)
         for group_mapping in self.group_mappings:
             src = jmespath.search(group_mapping.jmes_path, api_response)
-            if src == None:
+            if src is None:
                 continue
             if not isinstance(src, list):
                 src = [src]
@@ -585,28 +612,156 @@ class UserGroupConfigAPIGroupMappingValueToGroup:
         self.value = definition.get('value')
 
     def get_groups(self, default_group_name):
-        if self.group == None and self.groups == None:
+        if self.group is None and self.groups is None:
             return default_group_name
         else:
             return (self.groups or []) + ([self.group] if self.group else [])
 
 
-class UserGroupConfigAPIAuthSecret:
+class UserGroupConfigAPIAccessToken:
+    @classmethod
+    async def load_or_new(cls, name: str, namespace: str):
+        access_token = cls(name=name, namespace=namespace)
+        try:
+            await access_token._read_secret()
+        except kubernetes_asyncio.client.exceptions.ApiException as err:
+            if err.status != 404:
+                raise
+        return access_token
+
+    def __init__(self, name: str, namespace: str):
+        self.name = name
+        self.namespace = namespace
+        self.auth_checksum = None
+        self.is_loaded = False
+
+    def __str__(self):
+        return f"UserGroupConfigAPIAccessToken {self.name}"
+
+    @property
+    def expires_in(self):
+        return int(self._data.get('expires_in', 60))
+
+    @property
+    def is_expired(self):
+        """Consider token expired if it expires within 10 seconds."""
+        return time() > self.issued_at + self.expires_in - 10
+
+    @property
+    def issued_at(self):
+        return int(self._data.get('issued_at', self.updated_at))
+
+    @property
+    def value(self) -> str:
+        return self._data['access_token']
+
+    async def _read_secret(self):
+        '''
+        Attempt to read API access token secret.
+        '''
+        secret = await Operator.core_v1_api.read_namespaced_secret(self.name, self.namespace)
+        self.auth_checksum = b64decode(secret.data['auth_checksum']).decode('utf-8')
+        self._data = json.loads(b64decode(secret.data['data']).decode('utf-8'))
+        self.is_loaded = True
+        self.updated_at = int(secret.metadata.annotations[f"{operator_domain}/updated-at"])
+
+    async def refresh(self, client_id: str, client_secret: str) -> bool:
+        refresh_token = self._data.get('refresh_token')
+        instance_url = self._data.get('instance_url')
+        if refresh_token is None or instance_url is None:
+            return
+
+        headers = {"cache-control": "no-cache"}
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{instance_url}/services/oauth2/token",
+                headers=headers,
+                data={
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "grant_type": "refresh_token",
+                    "refresh_token": refresh_token,
+
+                }
+            ) as response:
+                if response.status not in {200, 201}:
+                    text = await response.text()
+                    raise kopf.TemporaryError(
+                        f"Failed to refresh access token for {self}: {text}"
+                    )
+                data = await response.json()
+                await self._access_token.update(
+                    auth_checksum=self._checksum,
+                    data=data,
+                )
+
+    async def update(self, auth_checksum, data) -> None:
+        self._data = data
+        secret_data = {
+            "auth_checksum": b64encode(auth_checksum.encode('utf-8')).decode('utf-8'),
+            "data": b64encode(json.dumps(self._data).encode('utf-8')).decode('utf-8'),
+        }
+        try:
+            await Operator.core_v1_api.patch_namespaced_secret(
+                name=self.name,
+                namespace=self.namespace,
+                body={
+                    "data": secret_data,
+                    "metadata": {
+                        "annotations": {
+                            f"{operator_domain}/updated-at": str(int(time())),
+                        }
+                    }
+                }
+            )
+            return
+        except kubernetes_asyncio.client.exceptions.ApiException as e:
+            if e.status != 404:
+                raise
+        await Operator.core_v1_api.create_namespaced_secret(
+            namespace=self.namespace,
+            body=kubernetes_asyncio.client.V1Secret(
+                data=secret_data,
+                metadata=kubernetes_asyncio.client.V1ObjectMeta(
+                    name=self.name,
+                    annotations={
+                        f"{operator_domain}/updated-at": str(int(time())),
+                    }
+                )
+            )
+        )
+
+class UserGroupConfigAPIAuth:
     def __init__(self, definition):
         self.name = definition['name']
-        self._secret_data_loaded = False
-        self.namespace = definition.get('namespace', operator_namespace)
+        self.namespace = definition.get('namespace', Operator.operator_namespace)
+        self._auth_secret = None
+        self._access_token = None
+        self._checksum = None
+        self._parameters = None
+        self._type = None
+        self._url = None
+
+    def __str__(self):
+        return f"UserGroupConfigAPIAuth {self.name}"
+
+    @property
+    def client_id(self):
+        return self._parameters.get('client_id')
+
+    @property
+    def client_secret(self):
+        return self._parameters.get('client_secret')
 
     async def _read_secret(self):
         '''
         Attempt to read API auth secret with retries in case the configuration was created before the secret.
         '''
-        if self._secret_data_loaded:
-            return
         attempt = 0
         while True:
             try:
-                secret = await core_v1_api.read_namespaced_secret(self.name, self.namespace)
+                secret = await Operator.core_v1_api.read_namespaced_secret(self.name, self.namespace)
+                self._checksum = sha256(json.dumps(secret.data, sort_keys=True).encode('utf-8')).hexdigest()
                 if 'type' not in secret.data:
                     raise kopf.TemporaryError(
                         f"Auth secret {self.name} in {self.namespace} does not have data.type",
@@ -626,19 +781,65 @@ class UserGroupConfigAPIAuthSecret:
                             delay=600
                         )
                     self._parameters = yaml.safe_load(b64decode(secret.data['parameters']).decode('utf-8'))
-                    self._secret_data_loaded = True
                     return
-                else:
-                    raise kopf.TemporaryError(
-                        f"Unknown auth type '{self.type}' from auth ecret {self.name} in {self.namespace}",
-                        delay=600
-                    )
+                raise kopf.TemporaryError(
+                    f"Unknown auth type '{self.type}' from auth ecret {self.name} in {self.namespace}",
+                    delay=600
+                )
             except kubernetes_asyncio.client.exceptions.ApiException as e:
                 if e.status == 404 and attempt < 10:
                     attempt += 1
                     await asyncio.sleep(0.5)
                 else:
                     raise
+
+    async def get_access_token(self, logger):
+        if (
+            self._access_token is not None and
+            self._access_token.is_loaded and
+            not self._access_token.is_expired
+        ):
+            return self._access_token.value
+
+        await self._read_secret()
+
+        if self._access_token is None:
+            self._access_token = await UserGroupConfigAPIAccessToken.load_or_new(
+                name=f"{self.name}-access-token",
+                namespace=self.namespace,
+            )
+
+        if (
+            self._access_token.is_loaded and
+            self._access_token.auth_checksum == self._checksum
+        ):
+            if not self._access_token.is_expired:
+                return self._access_token.value
+            if await self._access_token.refresh(
+                client_id=self.client_id,
+                client_secret=self.client_secret,
+            ):
+                return self._access_token.value
+
+        headers = {"cache-control": "no-cache"}
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                self._url,
+                headers=headers,
+                data=self._parameters
+            ) as response:
+                if response.status not in {200, 201}:
+                    text = await response.text()
+                    raise kopf.TemporaryError(
+                        f"Failed to get access token for {self}: {text}"
+                    )
+                data = await response.json()
+                await self._access_token.update(
+                    auth_checksum=self._checksum,
+                    data=data,
+                )
+                return self._access_token.value
+
 
     async def get_parameters(self):
         await self._read_secret()
@@ -682,13 +883,7 @@ class UserGroupConfigLDAP:
                 f.write(self.ca_cert)
         return file_path
 
-    async def get_bind_dn(self):
-        return await self.auth_secret.get_bind_dn()
-
-    async def get_bind_password(self):
-        return await self.auth_secret.get_bind_password()
-
-    async def get_connection(self):
+    async def connect(self):
         bind_dn = await self.get_bind_dn()
         bind_password = await self.get_bind_password()
         if self.connection:
@@ -701,12 +896,18 @@ class UserGroupConfigLDAP:
             )
             return self.connection
 
+    async def get_bind_dn(self):
+        return await self.auth_secret.get_bind_dn()
+
+    async def get_bind_password(self):
+        return await self.auth_secret.get_bind_password()
+
     async def get_group_names(self, user, identity, logger, retries=5):
         async with self.lock:
             attempt = 0
             while True:
                 try:
-                    connection = await self.get_connection()
+                    await self.connect()
                     loop = asyncio.get_event_loop()
                     return await loop.run_in_executor(
                         None, self.__noasync_get_group_names,
@@ -770,7 +971,7 @@ class UserGroupConfigLDAP:
                     else:
                         group_names.add(default_group_name)
             except ldap3.core.exceptions.LDAPKeyError:
-                logging.warn(f"{ldap_user.entry_dn} has no attribute {attribute.attribute}")
+                logger.warn("%s has no attribute %s", attribute.attribute, ldap_user.entry_dn)
 
         return group_names
 
@@ -814,10 +1015,9 @@ class UserGroupConfigLDAPAttributeValueToGroup:
         self.value = definition['value']
 
     def get_groups(self, default_group_name):
-        if self.group == None and self.groups == None:
+        if self.group is None and self.groups is None:
             return default_group_name
-        else:
-            return (self.groups or []) + ([self.group] if self.group else [])
+        return (self.groups or []) + ([self.group] if self.group else [])
 
 
 class UserGroupConfigLDAPAuthSecret:
@@ -826,7 +1026,7 @@ class UserGroupConfigLDAPAuthSecret:
         self._bind_dn = None
         self._bind_password = None
         self._lock = asyncio.Lock()
-        self.namespace = definition.get('namespace', operator_namespace)
+        self.namespace = definition.get('namespace', Operator.operator_namespace)
 
     async def _read_secret(self):
         '''
@@ -835,7 +1035,7 @@ class UserGroupConfigLDAPAuthSecret:
         attempt = 0
         while True:
             try:
-                secret = await core_v1_api.read_namespaced_secret(self.name, self.namespace)
+                secret = await Operator.core_v1_api.read_namespaced_secret(self.name, self.namespace)
                 self._bind_dn = b64decode(secret.data['bindDN']).decode('utf-8')
                 self._bind_password = b64decode(secret.data['bindPassword']).decode('utf-8')
                 return
@@ -884,10 +1084,10 @@ class UserGroupConfigSalesforce:
             loop = asyncio.get_event_loop()
             return await loop.run_in_executor(
                 None, self.__noasync_get_group_names,
-                user, identity, logger, salesforce_api
+                user, identity, logger, salesforce_api, logger
             )
 
-    def __noasync_get_group_names(self, user, identity, logger, salesforce_api):
+    def __noasync_get_group_names(self, user, identity, salesforce_api, logger):
         # simple_salesforce does not support asyncio
         group_names = set()
 
@@ -930,7 +1130,7 @@ class UserGroupConfigSalesforceConsumerSecret:
         self.name = definition['name']
         self._tempfile = None
         self._lock = asyncio.Lock()
-        self.namespace = definition.get('namespace', operator_namespace)
+        self.namespace = definition.get('namespace', Operator.operator_namespace)
 
     def __del__(self):
         if self._tempfile:
@@ -951,7 +1151,7 @@ class UserGroupConfigSalesforceConsumerSecret:
         attempt = 0
         while True:
             try:
-                secret = await core_v1_api.read_namespaced_secret(self.name, self.namespace)
+                secret = await Operator.core_v1_api.read_namespaced_secret(self.name, self.namespace)
                 secret_keys = secret.data.keys()
                 if secret_keys == 1:
                     client_secret_key = secret_keys[1]
@@ -986,10 +1186,9 @@ class UserGroupConfigSalesforceFieldValueToGroup:
         self.value = definition['value']
 
     def get_groups(self, default_group_name):
-        if self.group == None and self.groups == None:
+        if self.group is None and self.groups is None:
             return default_group_name
-        else:
-            return (self.groups or []) + ([self.group] if self.group else [])
+        return (self.groups or []) + ([self.group] if self.group else [])
 
 
 class UserGroupMember:
@@ -1027,7 +1226,7 @@ class UserGroupMember:
             }
             if group:
                 definition['metadata']['labels']['usergroup.pfe.redhat.com/group-uid'] = group.uid
-            await custom_objects_api.create_cluster_custom_object('usergroup.pfe.redhat.com', 'v1', 'usergroupmembers', definition)
+            await Operator.custom_objects_api.create_cluster_custom_object('usergroup.pfe.redhat.com', 'v1', 'usergroupmembers', definition)
             logger.info(f"Created UserGroupMember {name}")
         except kubernetes_asyncio.client.exceptions.ApiException as e:
             if e.status != 409:
@@ -1044,8 +1243,6 @@ class UserGroupMember:
 
 @kopf.on.startup()
 async def configure(settings: kopf.OperatorSettings, **_):
-    global core_v1_api, custom_objects_api, operator_namespace
-
     # Store last handled configuration in status
     settings.persistence.diffbase_storage = kopf.StatusDiffBaseStorage(field='status.diffBase')
 
@@ -1067,22 +1264,11 @@ async def configure(settings: kopf.OperatorSettings, **_):
     # Configure logging
     configure_kopf_logging()
 
-    if os.path.exists('/run/secrets/kubernetes.io/serviceaccount/token'):
-        kubernetes_asyncio.config.load_incluster_config()
-        with open('/run/secrets/kubernetes.io/serviceaccount/namespace') as f:
-            operator_namespace = f.read()
-    else:
-        await kubernetes_asyncio.config.load_kube_config()
-        operator_namespace = kubernetes_asyncio.config.list_kube_config_contexts()[1]['context']['namespace']
-
-    core_v1_api = kubernetes_asyncio.client.CoreV1Api()
-    custom_objects_api = kubernetes_asyncio.client.CustomObjectsApi()
-
-    await UserGroupConfig.preload()
+    await Operator.on_startup()
 
 
 @kopf.on.event('user.openshift.io', 'v1', 'groups')
-async def group_handler(event, logger, **_):
+async def group_handler(event, **_):
     if event['type'] == 'DELETED':
         await Group.unregister(event['object']['metadata']['name'])
     else:
@@ -1118,7 +1304,7 @@ async def usergroupconfig_create_or_update(name, spec, logger, **_):
     await config.manage_groups(logger=logger)
 
 @kopf.on.resume('usergroup.pfe.redhat.com', 'v1', 'usergroupconfigs')
-async def usergroupconfig_resume(name, spec, logger, **_):
+async def usergroupconfig_resume(name, spec, **_):
     UserGroupConfig.register(name=name, spec=spec)
 
 @kopf.daemon('usergroup.pfe.redhat.com', 'v1', 'usergroupconfigs', cancellation_timeout=1)
@@ -1129,13 +1315,12 @@ async def usergroupconfig_daemon(stopped, name, spec, logger, **_):
             await asyncio.sleep(config.refresh_interval)
             if stopped:
                 break
-            else:
-                await config.manage_groups(logger=logger)
+            await config.manage_groups(logger=logger)
     except asyncio.CancelledError:
         pass
 
 @kopf.on.delete('usergroup.pfe.redhat.com', 'v1', 'usergroupconfigs')
-async def usergroupmember_delete(name, spec, logger, **_):
+async def usergroupconfig_delete(name, spec, logger, **_):
     config = UserGroupConfig(name=name, spec=spec)
     await config.cleanup_on_delete(logger)
     config.unregister()
@@ -1144,7 +1329,7 @@ async def usergroupmember_delete(name, spec, logger, **_):
 @kopf.on.create('usergroup.pfe.redhat.com', 'v1', 'usergroupmembers', id='usergroupmember_create')
 @kopf.on.resume('usergroup.pfe.redhat.com', 'v1', 'usergroupmembers', id='usergroupmember_resume')
 @kopf.on.update('usergroup.pfe.redhat.com', 'v1', 'usergroupmembers', id='usergroupmember_update')
-async def usergroupmember_event(name, labels, meta, spec, logger, **_):
+async def usergroupmember_event(spec, logger, **_):
     group = await Group.get(spec['group']['name'], init_new=True)
     await group.add_user(spec['user']['name'], logger=logger)
 

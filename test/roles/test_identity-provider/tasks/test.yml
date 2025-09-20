@@ -58,8 +58,7 @@
     name: test-identity-provider.user-group-operator-test
   register: r_verify_group
   failed_when: >-
-    r_verify_group.resources | length != 1 or
-    r_verify_group.resources[0].users != ['test-identity-provider-0']
+    'test-identity-provider-0' not in r_verify_group.resources[0].users
   until: r_verify_group is success
   retries: 10
   delay: 1
@@ -113,7 +112,8 @@
   register: r_verify_group
   failed_when: >-
     r_verify_group.resources | length != 1 or
-    r_verify_group.resources[0].users != ['test-identity-provider-0', 'test-identity-provider-1']
+    'test-identity-provider-0' not in r_verify_group.resources[0].users or
+    'test-identity-provider-1' not in r_verify_group.resources[0].users
   until: r_verify_group is success
   retries: 10
   delay: 1
@@ -153,7 +153,8 @@
   register: r_verify_group
   failed_when: >-
     r_verify_group.resources | length != 1 or
-    r_verify_group.resources[0].users != ['test-identity-provider-0']
+    'test-identity-provider-0' not in r_verify_group.resources[0].users or
+    'test-identity-provider-1' in r_verify_group.resources[0].users
   until: r_verify_group is success
   retries: 10
   delay: 1

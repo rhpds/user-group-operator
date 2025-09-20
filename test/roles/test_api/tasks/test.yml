@@ -25,6 +25,32 @@
         name: "{{ test_api_business_partner_user }}"
         uid: "{{ r_create_business_partner_user.result.metadata.uid }}"
 
+- name: Create test new API User
+  kubernetes.core.k8s:
+    definition:
+      apiVersion: user.openshift.io/v1
+      kind: User
+      metadata:
+        name: "{{ test_api_new_user }}"
+      identities:
+      - user-group-operator-test:{{ test_api_new_user }}
+  register: r_create_api_new_user
+
+- name: Create Identity for new API user
+  kubernetes.core.k8s:
+    definition:
+      apiVersion: user.openshift.io/v1
+      kind: Identity
+      metadata:
+        name: user-group-operator-test:{{ test_api_new_user }}
+      extra:
+        email: "{{ test_api_new_user }}"
+      providerName: user-group-operator-test
+      providerUserName: "{{ test_api_new_user }}"
+      user:
+        name: "{{ test_api_new_user }}"
+        uid: "{{ r_create_api_new_user.result.metadata.uid }}"
+
 - name: Create Secret for test-api-auth
   kubernetes.core.k8s:
     definition:
@@ -37,6 +63,19 @@
         parameters: "{{ test_api_auth.parameters | to_json | b64encode }}"
         type: "{{ test_api_auth.type | b64encode }}"
         url: "{{ test_api_auth.url | b64encode }}"
+
+- name: Create Secret for test-api-new-auth
+  kubernetes.core.k8s:
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: test-api-new-auth
+        namespace: "{{ test_namespace }}"
+      data:
+        parameters: "{{ test_api_new_auth.parameters | to_json | b64encode }}"
+        type: "{{ test_api_new_auth.type | b64encode }}"
+        url: "{{ test_api_new_auth.url | b64encode }}"
 
 - name: Create test-api UserGroupConfig
   kubernetes.core.k8s:
@@ -63,6 +102,21 @@
             - group: tech-partner
               value: true
           url: "{{ vars.test_api_lookup_url }}"
+        - authSecret:
+            name: test-api-new-auth
+          accessTokenSecret:
+            name: test-api-new-access-token
+          groupMappings:
+          - jmesPath: isPartnerUser
+            valueToGroup:
+            - group: partner
+              value: true
+          request:
+            jsonData:
+              email: "{% raw %}{{ identity.extra.email }}{% endraw %}"
+            method: POST
+          url: "{{ vars.test_api_new_lookup_url }}"
+          when: "identity.extra.email is defined"
 
 - name: Verify UserGroupMember created for business partner user
   kubernetes.core.k8s_info:
@@ -94,8 +148,8 @@
     name: partner
   register: r_verify_group
   failed_when: >-
-    r_verify_group.resources | length != 1 or
-    r_verify_group.resources[0].users != [test_api_business_partner_user]
+    test_api_business_partner_user not in r_verify_group.resources[0].users or
+    test_api_new_user not in r_verify_group.resources[0].users
   until: r_verify_group is success
   retries: 10
   delay: 1
@@ -107,8 +161,7 @@
     name: business_partner
   register: r_verify_partner_group
   failed_when: >-
-    r_verify_group.resources | length != 1 or
-    r_verify_group.resources[0].users != [test_api_business_partner_user]
+    test_api_business_partner_user not in r_verify_group.resources[0].users
   until: r_verify_group is success
   retries: 10
   delay: 1
