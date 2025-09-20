@@ -19,7 +19,7 @@ commands:
   id: s2i-run
 components:
 - container:
-    image: quay.io/redhat-cop/python-kopf-s2i:v1.37
+    image: quay.io/rhpds/python-kopf-s2i:v1.38
     mountSources: true
     sourceMapping: /tmp/projects
   name: s2i-builder

@@ -86,7 +86,7 @@ deploy: true
 replicaCount: 1
 
 image:
-  repository: quay.io/redhat-pfe/user-group-operator
+  repository: quay.io/rhpds/user-group-operator
   pullPolicy: Always
   tagOverride: ""
 
