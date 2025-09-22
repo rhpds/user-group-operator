@@ -542,6 +542,9 @@ class UserGroupConfigAPI:
         self.url = definition['url']
         self.when = definition.get('when')
 
+    def __str__(self):
+        return f"UserGroupConfigAPI {self.url}"
+
     async def get_api_response(self, user, identity, logger, retries=5):
         async with self.lock:
             attempt = 0
@@ -640,16 +643,12 @@ class UserGroupConfigAPIAccessToken:
 
     @property
     def expires_in(self):
-        return int(self._data.get('expires_in', 60))
+        return int(self._data.get('expires_in', 3600))
 
     @property
     def is_expired(self):
         """Consider token expired if it expires within 10 seconds."""
-        return time() > self.issued_at + self.expires_in - 10
-
-    @property
-    def issued_at(self):
-        return int(self._data.get('issued_at', self.updated_at))
+        return time() > self.updated_at + self.expires_in - 10
 
     @property
     def value(self) -> str:
@@ -665,11 +664,14 @@ class UserGroupConfigAPIAccessToken:
         self.is_loaded = True
         self.updated_at = int(secret.metadata.annotations[f"{operator_domain}/updated-at"])
 
-    async def refresh(self, client_id: str, client_secret: str) -> bool:
+    async def refresh(self,
+        client_id: str,
+        client_secret: str,
+    ) -> bool:
         refresh_token = self._data.get('refresh_token')
         instance_url = self._data.get('instance_url')
         if refresh_token is None or instance_url is None:
-            return
+            return False
 
         headers = {"cache-control": "no-cache"}
         async with aiohttp.ClientSession() as session:
@@ -681,7 +683,6 @@ class UserGroupConfigAPIAccessToken:
                     "client_secret": client_secret,
                     "grant_type": "refresh_token",
                     "refresh_token": refresh_token,
-
                 }
             ) as response:
                 if response.status not in {200, 201}:
@@ -690,10 +691,12 @@ class UserGroupConfigAPIAccessToken:
                         f"Failed to refresh access token for {self}: {text}"
                     )
                 data = await response.json()
-                await self._access_token.update(
-                    auth_checksum=self._checksum,
+                data.setdefault('refresh_token', refresh_token)
+                await self.update(
+                    auth_checksum=self.auth_checksum,
                     data=data,
                 )
+                return True
 
     async def update(self, auth_checksum, data) -> None:
         self._data = data
@@ -819,6 +822,7 @@ class UserGroupConfigAPIAuth:
                 client_id=self.client_id,
                 client_secret=self.client_secret,
             ):
+                logger.info("Refreshed access token for %s", self)
                 return self._access_token.value
 
         headers = {"cache-control": "no-cache"}
