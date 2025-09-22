@@ -104,8 +104,6 @@
           url: "{{ vars.test_api_lookup_url }}"
         - authSecret:
             name: test-api-new-auth
-          accessTokenSecret:
-            name: test-api-new-access-token
           groupMappings:
           - jmesPath: isPartnerUser
             valueToGroup:
