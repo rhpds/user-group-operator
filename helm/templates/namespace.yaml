@@ -3,7 +3,7 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: {{ include ".namespaceName" . }}
+  name: {{ include "userGroupOperator.namespaceName" . }}
   labels:
     {{- include "userGroupOperator.labels" . | nindent 4 }}
 {{- end -}}
