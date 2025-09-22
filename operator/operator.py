@@ -45,7 +45,7 @@ class Operator:
         cls.core_v1_api = kubernetes_asyncio.client.CoreV1Api(cls.api_client)
         cls.custom_objects_api = kubernetes_asyncio.client.CustomObjectsApi(cls.api_client)
 
-    await UserGroupConfig.preload()
+        await UserGroupConfig.preload()
 
 class Group:
     instances = {}
