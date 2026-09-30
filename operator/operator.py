@@ -960,14 +960,14 @@ class UserGroupConfigLDAP:
 
         for attribute_to_group in self.attribute_to_group:
             try:
-                values = reader[0][attribute.attribute].values
+                values = ldap_user[attribute_to_group.attribute].values
                 for value in values:
                     value = str(value)
                     if value.startswith('cn='):
                         cn = value[3:].split(',', 1)[0]
-                        default_group_name = f"ldap-{attribute.attribute}-{cn}"
+                        default_group_name = f"ldap-{attribute_to_group.attribute}-{cn}"
                     else:
-                        default_group_name = f"ldap-{attribute.attribute}-{value}"
+                        default_group_name = f"ldap-{attribute_to_group.attribute}-{value}"
                     if attribute_to_group.value_to_group:
                         for value_to_group in attribute_to_group.value_to_group:
                             if value == value_to_group.value:
@@ -975,7 +975,7 @@ class UserGroupConfigLDAP:
                     else:
                         group_names.add(default_group_name)
             except ldap3.core.exceptions.LDAPKeyError:
-                logger.warn("%s has no attribute %s", attribute.attribute, ldap_user.entry_dn)
+                logger.warning("%s has no attribute %s", ldap_user.entry_dn, attribute_to_group.attribute)
 
         return group_names
 
@@ -1235,6 +1235,9 @@ class UserGroupMember:
         except kubernetes_asyncio.client.exceptions.ApiException as e:
             if e.status != 409:
                 raise
+            # An existing membership record does not guarantee that the user
+            # is still present in the Group. Repair drift on each reconciliation.
+            await group.add_user(user.name, logger=logger)
 
     def __init__(self, definition):
         self.metadata = definition['metadata']
@@ -1295,7 +1298,7 @@ async def oauthaccesstoken_handler(event, logger, **_):
     if datetime.now(timezone.utc) - operator_start_datetime < timedelta(minutes=5):
         return
     # Only manage groups for user when OAuthAccessTokens is added and user is not recently created.
-    if event['type'] != 'ADDED':
+    if event['type'] == 'ADDED':
         user = await User.get(event['object']['userName'])
         if datetime.now(timezone.utc) - user.creation_datetime > timedelta(minutes=1):
             await user.manage_groups(logger=logger)

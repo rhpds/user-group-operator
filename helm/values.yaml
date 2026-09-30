@@ -10,6 +10,8 @@ namespace:
   name:
 
 #config:
+#  # Membership refresh interval in seconds (default: 10800; minimum: 10).
+#  refreshInterval: 10800
 #  emailDomainGroups:
 #    enable: false
 #    prefix: email-domain.

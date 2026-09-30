@@ -5,6 +5,9 @@ kind: UserGroupConfig
 metadata:
   name: cluster
 spec:
+  {{- if hasKey .Values.config "refreshInterval" }}
+  refreshInterval: {{ .Values.config.refreshInterval }}
+  {{- end }}
   {{- if .Values.config.api }}
   api:
     {{- toYaml .Values.config.api | nindent 4 }}

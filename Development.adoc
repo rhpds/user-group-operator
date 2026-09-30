@@ -1,5 +1,14 @@
 # Development
 
+Run the local regression tests with the operator's Python dependencies and Kopf installed:
+
+------------------------------------------
+python -m unittest discover -s test -p 'test_*.py' -v
+------------------------------------------
+
+Install Helm to include the chart rendering checks; these checks are skipped if Helm is unavailable.
+These tests mock external services and do not require a cluster.
+
 Development on this operator can be performed in the `odo` OpenShift developer CLI or building with OpenShift build configs.
 An OpenShift cluster with cluster-admin is required for `odo` development.
 https://developers.redhat.com/products/codeready-containers/overview[CodeReady Containers] is recommended for local development.
